@@ -1,10 +1,12 @@
 # SunsetGraphicsEngine
 
-DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジン。
+DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジン。単独のライブラリとして、ほかのプロジェクトから使えます。
 
+- エンジン本体は `SunsetGraphicsEngine.dll`。DLL の境界は C ABI で、C++ API はヘッダーのみのラッパー
+- DX12・Vulkan のバックエンドは、本体が実行時に `LoadLibrary` / `dlopen` でロードする DLL
+- アプリと DLL のコンパイラ / CRT / Debug・Release が違っても動く
 - **デバイス** と **スワップチェーン / RenderTarget / DepthStencil** を分離した設計
-- DX12・Vulkan は実行時に `LoadLibrary` / `dlopen` でロードする DLL
-- Deferred Rendering・シャドウマップ・マルチウィンドウに対応
+- Deferred Rendering・シャドウマップ・マルチウィンドウ・DXR に対応
 
 > **現在の対応状況**
 >
@@ -15,6 +17,7 @@ DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジ�
 >
 > Linux / macOS は Vulkan バックエンドが前提のため、現時点では動作しません。
 > 今後の設計方針 (ABI v2・レンダーグラフ・エディター) は [docs/design/editor-architecture.md](docs/design/editor-architecture.md) を参照してください。
+> エディターは、このエンジンと SunsetMathLib を組み合わせる別リポジトリ SunsetStudio で開発します。
 
 ---
 
@@ -24,20 +27,19 @@ DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジ�
 SunsetGraphicsEngine/
 ├── CMakeLists.txt                  ← ルート (オプションと add_subdirectory のみ)
 ├── CMakePresets.json               ← Ninja / VS2022 / Linux プリセット
-├── cmake/                          ← 共通の警告・定義、DXC の検出、外部ライブラリ (FetchContent)
+├── cmake/                          ← 共通の警告・定義、DXC の検出、パッケージ設定、配置関数
 ├── engine/
 │   ├── abi/include/gfx/abi/        ← DLL 境界の C ABI (gfx_abi、ヘッダーのみ)
 │   │     GfxBackendABI.h           ←   まとめて読み込むヘッダー
 │   │     Types / PipelineState / Commands / Resources / Compat / Interfaces / Device / Plugin .h
 │   ├── schema/include/gfx/schema/  ← v2 記述子のメタデータ表 (gfx_schema、ヘッダーのみ)
-│   ├── core/                       ← GraphicsEngine.lib (プラグインのロード、RenderWindow)
+│   ├── core/                       ← 本体 SunsetGraphicsEngine.dll (C ABI) と C++ ラッパー
 │   └── rendergraph/                ← Phase 3 (未実装)
 ├── backends/
 │   ├── dx12/                       ← gfx_dx12.dll (責務ごとに分割: Device / CommandBuffer / Resources / ...)
 │   └── vulkan/                     ← gfx_vulkan (現在はビルド対象外)
 ├── samples/deferred/               ← GfxExample (ディファードレンダリングのサンプル)
 │   └── shaders/                    ←   HLSL (ビルド時に bin/shaders/ にコピー)
-├── editor/                         ← GfxEditor (Phase 4。現在は依存ライブラリの確認用スタブ)
 ├── shaders/                        ← 共有 HLSL (未使用)
 ├── assets/                         ← レンダーグラフ / パイプラインの JSON (Phase 3 以降)
 ├── tests/                          ← 自動テスト (未実装)
@@ -50,7 +52,7 @@ SunsetGraphicsEngine/
 - `engine/abi` は何にも依存しません。
 - `backends/*` は `engine/abi` にだけ依存します (`engine/core` は参照しません)。
 - `engine/schema` と `engine/core` は `engine/abi` に依存します。
-- `samples/*` と `editor` は `engine/core` と `engine/schema` に依存し、バックエンドは実行時にロードします。
+- `samples/*` (と外部のアプリ) は `engine/core` と `engine/schema` に依存し、バックエンドは本体が実行時にロードします。
 
 公開ヘッダーは `#include "gfx/<モジュール>/<ファイル>.h"` の形で読み込みます (例: `#include "gfx/core/GraphicsEngine.h"`)。
 
@@ -125,8 +127,8 @@ cmake --build build/release
 |------|--------|------|
 | `GFX_BUILD_DX12` | `WIN32` | DirectX 12 バックエンド DLL をビルドする |
 | `GFX_BUILD_VULKAN` | `OFF` | Vulkan バックエンド DLL をビルドする (現在はビルド不可。上記「対応状況」を参照) |
-| `GFX_BUILD_EXAMPLE` | `ON` | サンプルアプリ `GfxExample` をビルドする |
-| `GFX_BUILD_EDITOR` | `OFF` | エディター `GfxEditor` をビルドする。初回の configure 時に ImGui / imnodes / nlohmann_json をダウンロードする |
+| `GFX_BUILD_EXAMPLE` | 単独ビルド時 `ON` / 取り込まれたとき `OFF` | サンプルアプリ `GfxExample` をビルドする |
+| `GFX_INSTALL` | `ON` | install / export (find_package 用) の規則を生成する |
 | `GFX_ENABLE_VALIDATION` | `OFF` | GPU バリデーション / デバッグレイヤーを有効にする |
 | `GFX_DXC_DIR` | *(空)* | DXC のルートディレクトリ (HLSL → DXIL コンパイルを有効化) |
 
@@ -155,7 +157,8 @@ cmake --preset windows-debug ^
 build/<プリセット>/bin/
 ├── GfxExample.exe        ← サンプルアプリ (Windows)
 ├── shaders/              ← サンプルの HLSL
-├── GfxEditor.exe         ← エディター (GFX_BUILD_EDITOR=ON のとき)
+├── SunsetGraphicsEngine.dll ← エンジン本体
+├── dxcompiler.dll        ← DXC (DXR のシェーダーコンパイル用)
 ├── GfxExample            ← サンプルアプリ (Linux)
 ├── gfx_dx12.dll          ← DX12 バックエンド (Windows)
 ├── gfx_vulkan.dll        ← Vulkan バックエンド (Windows)
@@ -179,6 +182,9 @@ build/<プリセット>/bin/
 ## API 利用時のルール
 
 ### 所有権 (DLL 境界)
+
+エンジン本体の DLL 境界は C ABI (`gfx/core/CoreAPI.h`) です。`GraphicsEngine` / `RenderWindow` はヘッダーのみのラッパーで、
+`std::string` などの C++ の型が DLL の境界を越えることはありません。
 
 `IRenderTarget` / `IDepthStencil` / `ISwapChain` / `IPipeline` / `ICommandBuffer` は
 バックエンド DLL 内のオブジェクトが所有します。アプリ側で `delete` してはいけません。
@@ -239,7 +245,46 @@ cmake --install build/linux-release --prefix /usr/local
 
 | インストール先 | 内容 |
 |---------------|------|
-| `<prefix>/lib/` | `libGraphicsEngine.a` |
 | `<prefix>/include/gfx/` | ヘッダファイル (`gfx/abi`、`gfx/schema`、`gfx/core`) |
-| `<prefix>/bin/` | DLL (Windows) |
-| `<prefix>/lib/` | 共有ライブラリ (Linux / macOS)。エンジンは実行ファイルと同じディレクトリと `<exe>/../lib` を探索します |
+| `<prefix>/bin/` | `SunsetGraphicsEngine.dll`、`gfx_dx12.dll`、`dxcompiler.dll` (Windows) |
+| `<prefix>/lib/` | インポートライブラリ (Windows)、共有ライブラリ (Linux / macOS) |
+| `<prefix>/lib/cmake/SunsetGraphicsEngine/` | `find_package(SunsetGraphicsEngine)` 用の設定ファイル |
+
+本体は、実行ファイルのディレクトリ、本体 DLL のディレクトリ、`<exe>/../lib` の順にバックエンド DLL を探します。
+
+---
+
+## ほかのプロジェクトから使う
+
+ターゲット名は、`find_package` で使う場合も FetchContent / `add_subdirectory` で取り込む場合も同じです。
+
+| ターゲット | 内容 |
+|-----------|------|
+| `SunsetGraphicsEngine::core` | 本体 DLL と C++ API (`gfx/core/GraphicsEngine.h`)。通常はこれだけをリンクする |
+| `SunsetGraphicsEngine::schema` | 記述子のメタデータ表 (エディターのインスペクター / JSON 用) |
+| `SunsetGraphicsEngine::abi` | DLL 境界の C ABI (`core` から自動で参照される) |
+| `SunsetGraphicsEngine::dx12` | DX12 バックエンド。リンクはせず、配置にだけ使う |
+
+アプリの実行ファイルの横に DLL を配置するには、`sunset_gfx_deploy_runtime(<ターゲット>)` を呼びます。
+
+```cmake
+# インストール済みのパッケージを使う場合
+find_package(SunsetGraphicsEngine 1 REQUIRED)
+
+# または FetchContent で取り込む場合 (取り込まれたときはサンプルをビルドしない)
+# FetchContent_Declare(SunsetGraphicsEngine GIT_REPOSITORY ... GIT_TAG ...)
+# FetchContent_MakeAvailable(SunsetGraphicsEngine)
+
+add_executable(MyApp main.cpp)
+target_link_libraries(MyApp PRIVATE SunsetGraphicsEngine::core)
+sunset_gfx_deploy_runtime(MyApp)   # SunsetGraphicsEngine.dll / gfx_dx12.dll / dxcompiler.dll をコピー
+```
+
+```cpp
+#include "gfx/core/GraphicsEngine.h"
+
+GraphicsEngine engine;
+if (!engine.init(DeviceConfig{}))   // ヘッダーと本体 DLL の ABI が一致しない場合も false
+    std::cerr << engine.lastError() << "
+";
+```

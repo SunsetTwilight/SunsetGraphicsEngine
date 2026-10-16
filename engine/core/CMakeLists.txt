@@ -15,10 +15,12 @@ add_library(gfx_core SHARED
     src/PluginLoader.h                  # 非公開: LoadLibrary / dlopen ラッパー
 )
 add_library(gfx::core ALIAS gfx_core)
+add_library(SunsetGraphicsEngine::core ALIAS gfx_core)
 
 set_target_properties(gfx_core PROPERTIES
     OUTPUT_NAME "SunsetGraphicsEngine"
     PREFIX      ""          # Linux / macOS でも lib プレフィックスを付けない
+    EXPORT_NAME core
 )
 
 target_include_directories(gfx_core PUBLIC
@@ -37,4 +39,13 @@ if(UNIX)
     # dlopen は libdl にある。C ABI 以外のシンボルは公開しない
     target_link_libraries(gfx_core PRIVATE dl)
     target_compile_options(gfx_core PRIVATE -fvisibility=hidden)
+endif()
+
+if(GFX_INSTALL)
+    install(TARGETS gfx_core EXPORT SunsetGraphicsEngineTargets
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"    # Windows: .dll
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"    # Linux / macOS: .so / .dylib
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"    # Windows: インポートライブラリ (.lib)
+    )
+    install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" FILES_MATCHING PATTERN "*.h")
 endif()

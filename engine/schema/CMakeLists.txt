@@ -1,10 +1,12 @@
 # ============================================================
-#  gfx_schema (ヘッダーのみ)
+#  SunsetGraphicsEngine::schema (ヘッダーのみ)
 #  ABI v2 記述子のフィールドのメタデータ表 (エディターのインスペクターと JSON 入出力の土台)。
 #  公開ヘッダー: #include "gfx/schema/GfxSchema.h"
 # ============================================================
 add_library(gfx_schema INTERFACE)
 add_library(gfx::schema ALIAS gfx_schema)
+add_library(SunsetGraphicsEngine::schema ALIAS gfx_schema)
+set_target_properties(gfx_schema PROPERTIES EXPORT_NAME schema)
 
 target_include_directories(gfx_schema INTERFACE
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
@@ -12,4 +14,7 @@ target_include_directories(gfx_schema INTERFACE
 )
 target_link_libraries(gfx_schema INTERFACE gfx_abi)
 
-install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" FILES_MATCHING PATTERN "*.h")
+if(GFX_INSTALL)
+    install(TARGETS gfx_schema EXPORT SunsetGraphicsEngineTargets)
+    install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" FILES_MATCHING PATTERN "*.h")
+endif()

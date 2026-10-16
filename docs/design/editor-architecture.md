@@ -25,7 +25,7 @@
 │ Render Graph (Phase 3)  ── JSON でシリアライズ               │
 │   パス / リソースのノード、コンパイル (順序・バリア・寿命)   │
 ├──────────────────────────────────────────────────────────┤
-│ GraphicsEngine (静的ライブラリ)                             │
+│ GraphicsEngine (本体 DLL、C ABI + C++ ラッパー)             │
 │   プラグインのロード、ウィンドウ、スキーマ (リフレクション)  │
 ├──────────────────── DLL 境界 (C ABI) ─────────────────────┤
 │ Backend ABI v2 (Phase 2)                                   │
@@ -35,10 +35,36 @@
 └──────────────────────────────────────────────────────────┘
 ```
 
-### ディレクトリと CMake ターゲットの対応
+### リポジトリの構成
+
+エンジンと数学ライブラリは、それぞれ単独で使えるライブラリにする。エディターなど両方を組み合わせるソフトは、別のリポジトリにする。
+
+| リポジトリ | 内容 | 依存 |
+|-----------|------|------|
+| SunsetGraphicsEngine | このエンジン (本体 DLL、バックエンド DLL、サンプル) | なし (MathLib にも依存しない) |
+| SunsetMathLib | ヘッダーのみの数学ライブラリ (`MathLib::MathLib`) | なし |
+| SunsetStudio | エディター (Phase 4) など、両ライブラリを組み合わせるアプリ | 両ライブラリ、ImGui / imnodes / json |
+
+- エンジンの公開 API は POD (float 配列など) で表し、数学ライブラリの型を使わない。数学はアプリ側で MathLib を使う。
+- SunsetStudio は両ライブラリを FetchContent で取得する。開発用のプリセットでは、同じワークスペースの隣のフォルダを直接使う (`FETCHCONTENT_SOURCE_DIR_<名前>`)。
+
+### エンジン内のディレクトリと CMake ターゲットの対応
 
 | レイヤー | ディレクトリ | ターゲット | 依存してよいもの |
 |---------|-------------|-----------|-----------------|
+| Render Graph | `engine/rendergraph/` | (Phase 3) | core、schema |
+| GraphicsEngine (本体 DLL) | `engine/core/` | `SunsetGraphicsEngine::core` | abi |
+| スキーマ | `engine/schema/` | `SunsetGraphicsEngine::schema` | abi |
+| Backend ABI | `engine/abi/` | `SunsetGraphicsEngine::abi` | なし |
+| バックエンド | `backends/dx12/`、`backends/vulkan/` | `SunsetGraphicsEngine::dx12`、`::vulkan` | abi のみ |
+| サンプル | `samples/<名前>/` | `GfxExample` など | core、schema |
+
+- 公開ヘッダーは各モジュールの `include/gfx/<モジュール>/` に置き、`#include "gfx/<モジュール>/..."` で読み込む。
+- エンジン本体は DLL で、境界は C ABI (`gfx/core/CoreAPI.h`)。C++ API はヘッダーのみのラッパー (`gfx/core/GraphicsEngine.h`)。
+- バックエンドとエディターが直接依存しないことが、ABI の網羅性を保つための前提になる。エディターで必要な機能は、必ず ABI に追加してから使う。
+- シェーダーは `.hlsl` ファイルとして置く(共有するものは `shaders/`、サンプル固有のものは `samples/<名前>/shaders/`)。ビルド時に `bin/shaders/` にコピーし、実行時に読み込む。エディターのホットリロードはこの仕組みの上に作る。
+
+---------|-------------|-----------|-----------------|
 | Editor | `editor/` | `GfxEditor` | core、schema、rendergraph、外部ライブラリ (ImGui / imnodes / json) |
 | Render Graph | `engine/rendergraph/` | (Phase 3) | core、schema |
 | GraphicsEngine | `engine/core/` | `GraphicsEngine` | abi |

@@ -1,0 +1,24 @@
+@PACKAGE_INIT@
+
+# ============================================================
+#  find_package(SunsetGraphicsEngine) の設定ファイル
+#
+#  提供するターゲット:
+#    SunsetGraphicsEngine::abi     DLL 境界の C ABI (ヘッダーのみ)
+#    SunsetGraphicsEngine::schema  記述子のメタデータ表 (ヘッダーのみ)
+#    SunsetGraphicsEngine::core    本体 SunsetGraphicsEngine.dll + C++ ラッパー
+#    SunsetGraphicsEngine::dx12    DX12 バックエンド (リンクせず、実行時にロードされる)
+#  関数:
+#    sunset_gfx_deploy_runtime(<target>)  実行ファイルの横に DLL をコピーする
+# ============================================================
+include("${CMAKE_CURRENT_LIST_DIR}/SunsetGraphicsEngineTargets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/SunsetGraphicsEngineRuntime.cmake")
+
+# インストールに同梱された dxcompiler.dll も配置対象にする
+set(_sunset_gfx_dxc "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/dxcompiler.dll")
+if(EXISTS "${_sunset_gfx_dxc}")
+    set_property(GLOBAL APPEND PROPERTY SUNSET_GFX_RUNTIME_EXTRA_FILES "${_sunset_gfx_dxc}")
+endif()
+unset(_sunset_gfx_dxc)
+
+check_required_components(SunsetGraphicsEngine)

@@ -28,9 +28,10 @@ add_custom_target(GfxExample_shaders ALL
 add_dependencies(GfxExample GfxExample_shaders)
 install(DIRECTORY shaders DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
+# 外部のアプリと同じく、名前空間付きのターゲットだけを使う
 target_link_libraries(GfxExample PRIVATE
-    gfx_core
-    gfx_schema
+    SunsetGraphicsEngine::core
+    SunsetGraphicsEngine::schema
     gfx_options
 )
 
@@ -49,17 +50,9 @@ set_target_properties(GfxExample PROPERTIES
     XCODE_SCHEME_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# ---- ビルド順序: バックエンド DLL を先にビルドする ----
-# (exe はバックエンドにリンクしない。実行時に同じ bin/ からロードする)
-if(TARGET gfx_dx12)
-    add_dependencies(GfxExample gfx_dx12)
-endif()
-if(TARGET gfx_vulkan)
-    add_dependencies(GfxExample gfx_vulkan)
-endif()
-
-# DXC が見つかっていれば dxcompiler.dll を exe フォルダにコピーする
-gfx_copy_dxc_dll(GfxExample)
+# ---- 本体 DLL / バックエンド DLL / dxcompiler.dll を exe の横に配置する ----
+# (単独ビルドでは同じ bin/ に出力済みなので実質何もしないが、外部のアプリと同じ手順を使う)
+sunset_gfx_deploy_runtime(GfxExample)
 
 install(TARGETS GfxExample RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 

@@ -70,7 +70,9 @@ endif()
 set_target_properties(gfx_vulkan PROPERTIES
     OUTPUT_NAME "gfx_vulkan"
     PREFIX      ""
+    EXPORT_NAME vulkan
 )
+add_library(SunsetGraphicsEngine::vulkan ALIAS gfx_vulkan)
 
 target_compile_definitions(gfx_vulkan PRIVATE
     GFX_BUILDING_DLL
@@ -82,9 +84,12 @@ target_compile_definitions(gfx_vulkan PRIVATE
     $<$<PLATFORM_ID:Linux>:VK_USE_PLATFORM_XCB_KHR>
 )
 
-install(TARGETS gfx_vulkan
-    RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"   # Windows .dll
-    LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"   # Linux/macOS .so/.dylib
-)
+if(GFX_INSTALL)
+    install(TARGETS gfx_vulkan EXPORT SunsetGraphicsEngineTargets
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"   # Windows .dll
+        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"   # Linux/macOS .so/.dylib
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    )
+endif()
 
 message(STATUS "[SunsetGraphicsEngine] ターゲット: gfx_vulkan (Vulkan ${Vulkan_VERSION})")

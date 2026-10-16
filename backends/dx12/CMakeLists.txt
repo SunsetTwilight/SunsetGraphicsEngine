@@ -55,7 +55,10 @@ set_target_properties(gfx_dx12 PROPERTIES
     WINDOWS_EXPORT_ALL_SYMBOLS OFF
     OUTPUT_NAME "gfx_dx12"
     PREFIX      ""          # lib プレフィックスを付けない
+    EXPORT_NAME dx12
 )
+# アプリはリンクしない (本体 DLL が実行時にロードする)。配置用に名前空間付きの名前を用意する
+add_library(SunsetGraphicsEngine::dx12 ALIAS gfx_dx12)
 
 target_compile_definitions(gfx_dx12 PRIVATE
     GFX_BUILDING_DLL
@@ -65,6 +68,11 @@ target_compile_definitions(gfx_dx12 PRIVATE
     NOMINMAX               # <windows.h> の min/max マクロを抑制
 )
 
-install(TARGETS gfx_dx12 RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+if(GFX_INSTALL)
+    install(TARGETS gfx_dx12 EXPORT SunsetGraphicsEngineTargets
+        RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
+        ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+    )
+endif()
 
 message(STATUS "[SunsetGraphicsEngine] ターゲット: gfx_dx12.dll")
