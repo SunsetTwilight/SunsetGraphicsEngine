@@ -1,5 +1,5 @@
 // ============================================================
-//  examples/main.cpp  (複数コマンドバッファ対応版)
+//  samples/deferred/main.cpp  (ディファードレンダリングのサンプル)
 //
 //  コマンドバッファの使い方を 3 パターン示す:
 //
@@ -16,8 +16,9 @@
 //    毎フレーム Direct コマンドバッファから executeBundle() で呼ぶ。
 //    記録コストを削減できる。
 // ============================================================
-#include "gfx/core/GraphicsEngine.h"
-#include "gfx/schema/GfxSchema.h"
+#include "SampleUtils.h"
+#include "ShaderFiles.h"
+#include "Win32Window.h"
 #include <cstring>
 #include <iostream>
 #include <stdexcept>
@@ -28,280 +29,6 @@
 #include <fstream>
 #include <timeapi.h>   // timeBeginPeriod / timeEndPeriod
 #pragma comment(lib, "winmm.lib")
-
-#if defined(_WIN32)
-#  define WIN32_LEAN_AND_MEAN
-#  include <windows.h>
-#endif
-
-// ------------------------------------------------------------
-//  エラーチェックヘルパー
-//  ポインタが nullptr なら例外を投げる
-// ------------------------------------------------------------
-template <typename T>
-T* check(T* ptr, const char* msg)
-{
-	if (!ptr)
-		throw std::runtime_error(std::string("[Error] ") + msg);
-	return ptr;
-}
-
-// BufferHandle / ShaderHandle / TextureHandle / SamplerHandle のバリデーション
-static void checkHandle(BufferHandle  h, const char* msg)
-{
-	if (!h.valid())
-		throw std::runtime_error(std::string("[Error] ") + msg);
-}
-static void checkHandle(ShaderHandle  h, const char* msg)
-{
-	if (!h.valid())
-		throw std::runtime_error(std::string("[Error] ") + msg);
-}
-static void checkHandle(TextureHandle h, const char* msg)
-{
-	if (!h.valid())
-		throw std::runtime_error(std::string("[Error] ") + msg);
-}
-static void checkHandle(SamplerHandle h, const char* msg)
-{
-	if (!h.valid())
-		throw std::runtime_error(std::string("[Error] ") + msg);
-}
-static void checkHandle(BindingLayoutHandle h, const char* msg)
-{
-	if (!h.valid())
-		throw std::runtime_error(std::string("[Error] ") + msg);
-}
-
-// ---------------------------------------------------
-//  GFX_EXAMPLE_DUMP_SCHEMA=1 のとき、v2 記述子の値をスキーマ (X マクロで生成した
-//  メタデータ表) だけを使って出力する。インスペクター / JSON シリアライザーの土台の確認用。
-//  配列は先頭の 2 要素だけを出力する。
-// ---------------------------------------------------
-static void dumpBySchema(const GfxStructInfo* si, const void* obj, int indent)
-{
-	const std::string pad(static_cast<size_t>(indent) * 2, ' ');
-	for (uint32_t i = 0; i < si->fieldCount; ++i)
-	{
-		const GfxFieldInfo& f = si->fields[i];
-		const uint32_t count  = (f.type == GfxFieldType::Char) ? 1u : f.arrayCount;
-		const uint32_t shown  = count < 2u ? count : 2u;
-		for (uint32_t k = 0; k < shown; ++k)
-		{
-			const void* p = gfxFieldPtr(obj, f, k);
-			std::cout << pad << f.name;
-			if (count > 1)
-				std::cout << "[" << k << "]";
-			std::cout << " (+" << (f.offset + f.size * k) << ")";
-
-			switch (f.type)
-			{
-			case GfxFieldType::Struct:
-				std::cout << " : " << f.structInfo->name << "\n";
-				dumpBySchema(f.structInfo, p, indent + 1);
-				continue;
-			case GfxFieldType::Bool:
-				std::cout << " = " << (gfxReadUnsigned(p, f.size) ? "true" : "false");
-				break;
-			case GfxFieldType::UInt8:
-			case GfxFieldType::UInt32:
-			case GfxFieldType::Handle:
-				std::cout << " = " << gfxReadUnsigned(p, f.size);
-				break;
-			case GfxFieldType::Int32:
-			{
-				int32_t v = 0;
-				std::memcpy(&v, p, sizeof(v));
-				std::cout << " = " << v;
-				break;
-			}
-			case GfxFieldType::Float:
-			{
-				float v = 0.0f;
-				std::memcpy(&v, p, sizeof(v));
-				std::cout << " = " << v;
-				break;
-			}
-			case GfxFieldType::Enum:
-			{
-				const uint64_t v  = gfxReadUnsigned(p, f.size);
-				const char*    nm = gfxEnumName(f.enumInfo, v);
-				std::cout << " = " << f.enumInfo->name << "::" << (nm ? nm : "?");
-				break;
-			}
-			case GfxFieldType::Flags:
-			{
-				const uint64_t v = gfxReadUnsigned(p, f.size);
-				std::cout << " = " << f.enumInfo->name << "(";
-				bool first = true;
-				for (uint32_t b = 0; b < f.enumInfo->valueCount; ++b)
-				{
-					const GfxEnumerator& e = f.enumInfo->values[b];
-					// 単一ビットの列挙子だけを出す (All などの合成値は除く)
-					const bool singleBit = e.value != 0 && (e.value & (e.value - 1)) == 0;
-					if (singleBit && (v & e.value) == e.value)
-					{
-						std::cout << (first ? "" : "|") << e.name;
-						first = false;
-					}
-				}
-				std::cout << ")";
-				break;
-			}
-			case GfxFieldType::Char:
-				std::cout << " = \"" << static_cast<const char*>(p) << "\"";
-				break;
-			case GfxFieldType::Pointer:
-				std::cout << " = (pointer)";
-				break;
-			case GfxFieldType::CString:
-			{
-				const char* s = nullptr;
-				std::memcpy(&s, p, sizeof(s));
-				std::cout << " = " << (s ? s : "(null)");
-				break;
-			}
-			}
-			std::cout << "\n";
-		}
-		if (count > shown)
-			std::cout << pad << f.name << "[" << shown << ".." << (count - 1) << "] ...\n";
-	}
-}
-static void checkHandle(PipelineHandle h, const char* msg)
-{
-	if (!h.valid())
-		throw std::runtime_error(std::string("[Error] ") + msg);
-}
-
-// ============================================================
-//  Win32 ネイティブウィンドウ ヘルパー
-// ============================================================
-#if defined(_WIN32)
-
-// ウィンドウプロシージャ
-// WndProc に渡すコンテキスト
-// SetWindowLongPtr(GWLP_USERDATA) でウィンドウに関連付ける
-struct WndContext
-{
-	RenderWindow*  win      = nullptr;
-	IDepthStencil** fwdDS   = nullptr;
-	GraphicsEngine* engine  = nullptr;
-	bool           resized  = false;
-	uint32_t       newW     = 0;
-	uint32_t       newH     = 0;
-	bool           debugRT  = false;  // F1: RT Shadow テクスチャを表示
-};
-
-static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
-{
-	auto* ctx = reinterpret_cast<WndContext*>(GetWindowLongPtrW(hwnd, GWLP_USERDATA));
-
-	switch (msg)
-	{
-	case WM_DESTROY:
-		PostQuitMessage(0);
-		return 0;
-
-	case WM_KEYDOWN:
-		if (wp == VK_F1 && ctx)
-			ctx->debugRT = !ctx->debugRT;
-		return 0;
-
-	case WM_SIZE:
-	{
-		// 最小化 (SIZE_MINIMIZED) のときはリサイズしない
-		if (wp == SIZE_MINIMIZED)
-			return 0;
-
-		const uint32_t w = LOWORD(lp);
-		const uint32_t h = HIWORD(lp);
-
-		// サイズが 0 のときは無視する
-		if (w == 0 || h == 0)
-			return 0;
-
-		// フレームループ側で処理するためフラグだけ立てる
-		// (GPU コマンド実行中に resize を呼ぶと COMMAND_ALLOCATOR_SYNC が発生するため)
-		if (ctx)
-		{
-			ctx->resized = true;
-			ctx->newW    = w;
-			ctx->newH    = h;
-		}
-		return 0;
-	}
-
-	default:
-		return DefWindowProcW(hwnd, msg, wp, lp);
-	}
-}
-
-// Win32 ウィンドウを作成して HWND を返す
-static HWND createNativeWindow(
-	HINSTANCE      hInstance,
-	const wchar_t* title,
-	uint32_t       width,
-	uint32_t       height)
-{
-	WNDCLASSEXW wc      = {};
-	wc.cbSize           = sizeof(wc);
-	wc.style            = CS_HREDRAW | CS_VREDRAW;
-	wc.lpfnWndProc      = WndProc;
-	wc.hInstance        = hInstance;
-	wc.hCursor          = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
-	wc.lpszClassName    = L"GfxExampleClass";
-
-	if (!RegisterClassExW(&wc))
-		throw std::runtime_error("[Error] RegisterClassExW failed");
-
-	// クライアント領域が指定サイズになるようウィンドウ全体のサイズを計算する
-	RECT rc = { 0, 0, static_cast<LONG>(width), static_cast<LONG>(height) };
-	AdjustWindowRect(&rc, WS_OVERLAPPEDWINDOW, FALSE);
-
-	HWND hwnd = CreateWindowExW(
-		0,
-		L"GfxExampleClass",
-		title,
-		WS_OVERLAPPEDWINDOW,
-		CW_USEDEFAULT, CW_USEDEFAULT,
-		rc.right  - rc.left,
-		rc.bottom - rc.top,
-		nullptr,
-		nullptr,
-		hInstance,
-		nullptr);
-
-	if (!hwnd)
-		throw std::runtime_error("[Error] CreateWindowExW failed");
-
-	ShowWindow(hwnd, SW_SHOWDEFAULT);
-	UpdateWindow(hwnd);
-
-	return hwnd;
-}
-
-#endif // _WIN32
-
-// ============================================================
-//  メッセージループ処理 (1 フレーム分のメッセージをポンプする)
-//  戻り値: false = WM_QUIT を受信したため終了すべき
-// ============================================================
-static bool pumpMessages()
-{
-#if defined(_WIN32)
-	MSG msg = {};
-	while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE))
-	{
-		if (msg.message == WM_QUIT)
-			return false;
-
-		TranslateMessage(&msg);
-		DispatchMessageW(&msg);
-	}
-#endif
-	return true;
-}
 
 int main()
 {
@@ -390,225 +117,62 @@ int main()
 		// ---------------------------------------------------
 
 		// 頂点シェーダー: MVP 行列で変換し UV を PS に渡す
-		static const char* k_VS = R"hlsl(
-			cbuffer Transform : register(b0) { float4x4 gMVP; };
-			struct VSIn  { float3 pos : POSITION; float2 uv : TEXCOORD0; };
-			struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-			VSOut main(VSIn v)
-			{
-				VSOut o;
-				o.pos = mul(gMVP, float4(v.pos, 1.0f));
-				o.uv  = v.uv;
-				return o;
-			}
-		)hlsl";
+		static const std::string k_VS_src = loadShaderSource("forward.vs.hlsl");
+		static const char*       k_VS     = k_VS_src.c_str();
 
 		// ピクセルシェーダー: テクスチャをサンプリングして出力する
 		// テクスチャが未バインドのときは白を出力する
-		static const char* k_PS = R"hlsl(
-			Texture2D    gTex     : register(t0);
-			SamplerState gSampler : register(s0);
-			struct PSIn { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-			float4 main(PSIn i) : SV_Target
-			{
-				return gTex.Sample(gSampler, i.uv);
-			}
-		)hlsl";
+		static const std::string k_PS_src = loadShaderSource("forward.ps.hlsl");
+		static const char*       k_PS     = k_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  G-Buffer 用 VS (法線付き)
 		//  Position(float3) + Normal(float3) + UV(float2) = 32 bytes
 		// ---------------------------------------------------
-		static const char* k_GBuf_VS = R"hlsl(
-			cbuffer Transform : register(b0) { float4x4 gMVP; float4x4 gWorld; };
-			struct VSIn  { float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0; };
-			struct VSOut {
-				float4 pos    : SV_Position;
-				float3 wNorm  : TEXCOORD0;
-				float2 uv     : TEXCOORD1;
-			};
-			VSOut main(VSIn v)
-			{
-				VSOut o;
-				o.pos   = mul(gMVP,   float4(v.pos, 1.0f));
-				o.wNorm = mul((float3x3)gWorld, v.nrm);
-				o.uv    = v.uv;
-				return o;
-			}
-		)hlsl";
+		static const std::string k_GBuf_VS_src = loadShaderSource("gbuffer.vs.hlsl");
+		static const char*       k_GBuf_VS     = k_GBuf_VS_src.c_str();
 
 		// ---------------------------------------------------
 		//  G-Buffer 用 PS: MRT 3 枚 (Albedo / Normal / Emissive)
 		// ---------------------------------------------------
-		static const char* k_GBuf_PS = R"hlsl(
-			Texture2D    gAlbedoTex : register(t0);
-			SamplerState gSampler   : register(s0);
-			struct PSIn {
-				float4 pos   : SV_Position;
-				float3 wNorm : TEXCOORD0;
-				float2 uv    : TEXCOORD1;
-			};
-			struct MRT {
-				float4 albedo   : SV_Target0;
-				float4 normal   : SV_Target1;
-				float4 emissive : SV_Target2;
-			};
-			MRT main(PSIn i)
-			{
-				MRT o;
-				o.albedo   = gAlbedoTex.Sample(gSampler, i.uv);
-				// ワールド法線を [0,1] に正規化して格納する
-				o.normal   = float4(normalize(i.wNorm) * 0.5f + 0.5f, 1.0f);
-				o.emissive = float4(0.0f, 0.0f, 0.0f, 1.0f);
-				return o;
-			}
-		)hlsl";
+		static const std::string k_GBuf_PS_src = loadShaderSource("gbuffer.ps.hlsl");
+		static const char*       k_GBuf_PS     = k_GBuf_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  Deferred Lighting 用 PS
 		//  G-Buffer 4枚 (t0=Albedo, t1=Normal, t2=Emissive, t3=Depth) を読み込む
 		//  ポイントライト最大16個を b0 の定数バッファで受け取る
 		// ---------------------------------------------------
-		static const char* k_Light_VS = R"hlsl(
-			struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-			VSOut main(uint vid : SV_VertexID)
-			{
-				// フルスクリーントライアングル (頂点バッファ不要)
-				float2 uv  = float2((vid << 1) & 2, vid & 2);
-				VSOut o;
-				o.pos = float4(uv * float2(2,-2) + float2(-1,1), 0, 1);
-				o.uv  = uv;
-				return o;
-			}
-		)hlsl";
+		static const std::string k_Light_VS_src = loadShaderSource("lighting.vs.hlsl");
+		static const char*       k_Light_VS     = k_Light_VS_src.c_str();
 
 		// ---------------------------------------------------
 		//  Grid Line シェーダー
 		// ---------------------------------------------------
-		static const char* k_Grid_VS = R"hlsl(
-			cbuffer Transform : register(b0) { float4x4 gVP; };
-			float4 main(float3 pos : POSITION) : SV_Position
-			{
-				float4 clip = mul(gVP, float4(pos, 1.0f));
-				// クリップ空間で Z をわずかに手前にずらして Z-fighting を防止する
-				clip.z -= 0.0001f * clip.w;
-				return clip;
-			}
-		)hlsl";
+		static const std::string k_Grid_VS_src = loadShaderSource("grid.vs.hlsl");
+		static const char*       k_Grid_VS     = k_Grid_VS_src.c_str();
 
-		static const char* k_Grid_PS = R"hlsl(
-			float4 main() : SV_Target
-			{
-				return float4(0.4f, 0.4f, 0.4f, 1.0f);
-			}
-		)hlsl";
+		static const std::string k_Grid_PS_src = loadShaderSource("grid.ps.hlsl");
+		static const char*       k_Grid_PS     = k_Grid_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  RT Composite シェーダー
 		//  UAV テクスチャをバックバッファにフルスクリーン合成する
 		// ---------------------------------------------------
-		static const char* k_RTComposite_VS = R"hlsl(
-			struct VSOut { float4 pos : SV_Position; float2 uv : TEXCOORD; };
-			VSOut main(uint id : SV_VertexID)
-			{
-				// 3頂点の大きな三角形で全画面をカバーする
-				// id=0: (-1,-1) id=1: (3,-1) id=2: (-1,3)
-				VSOut o;
-				o.uv  = float2((id == 1) ? 2.0 : 0.0, (id == 2) ? 2.0 : 0.0);
-				o.pos = float4(o.uv * float2(2,-2) + float2(-1,1), 0, 1);
-				return o;
-			}
-		)hlsl";
-		static const char* k_RTComposite_PS = R"hlsl(
-			Texture2D<float4> rtTex : register(t0);
-			SamplerState      smp   : register(s0);
-			struct PSIn { float4 pos : SV_Position; float2 uv : TEXCOORD; };
-			float4 main(PSIn i) : SV_Target
-			{
-				return rtTex.Sample(smp, i.uv);
-			}
-		)hlsl";
+		static const std::string k_RTComposite_VS_src = loadShaderSource("rt_composite.vs.hlsl");
+		static const char*       k_RTComposite_VS     = k_RTComposite_VS_src.c_str();
+		static const std::string k_RTComposite_PS_src = loadShaderSource("rt_composite.ps.hlsl");
+		static const char*       k_RTComposite_PS     = k_RTComposite_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  Shadow Pass VS: 光源視点の MVP で頂点変換のみ
 		//  PS なし (深度書き込みのみ)
 		// ---------------------------------------------------
-		static const char* k_Shadow_VS = R"hlsl(
-			cbuffer ShadowCB : register(b0) { float4x4 gLightMVP; };
-			struct VSIn { float3 pos : POSITION; float3 nrm : NORMAL; float2 uv : TEXCOORD0; };
-			float4 main(VSIn v) : SV_Position
-			{
-				return mul(gLightMVP, float4(v.pos, 1.0f));
-			}
-		)hlsl";
+		static const std::string k_Shadow_VS_src = loadShaderSource("shadow.vs.hlsl");
+		static const char*       k_Shadow_VS     = k_Shadow_VS_src.c_str();
 
-		static const char* k_Light_PS = R"hlsl(
-			Texture2D             tAlbedo   : register(t0);
-			Texture2D             tNormal   : register(t1);
-			Texture2D             tEmissive : register(t2);
-			Texture2D<float>      tDepth    : register(t3);
-			Texture2D<float4>     tRTShadow : register(t4);  // RT Shadow テクスチャ
-			SamplerState          gSampler  : register(s0);
-			SamplerComparisonState gShadowSampler : register(s1);
-
-			struct PointLight { float3 pos; float range; float3 color; float intensity; };
-			cbuffer LightCB : register(b0)
-			{
-				float4      gProjParams;
-				float3      _pad0; uint _pad1;
-				float4x4    gLightVP;
-				float4x4    gInvView;
-				float4      gViewPos;
-				uint        gLightCount;
-				float3      _pad2;
-				PointLight  gLights[16];
-			};
-
-			float3 ReconstructViewPos(float2 uv, float depth)
-			{
-				float2 ndc = uv * float2(2.0f, -2.0f) + float2(-1.0f, 1.0f);
-				float vz = gProjParams.w / (depth - gProjParams.z);
-				return float3(ndc.x / gProjParams.x * vz,
-							  ndc.y / gProjParams.y * vz, vz);
-			}
-
-			float SampleShadow(float2 uv)
-			{
-				// RT Shadow テクスチャから直接読み取る
-				return tRTShadow.Sample(gSampler, uv).r;
-			}
-
-			struct PSIn { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
-			float4 main(PSIn i) : SV_Target
-			{
-				float depth = tDepth.Sample(gSampler, i.uv).r;
-				if (depth >= 0.9999f) return float4(0.05f, 0.05f, 0.05f, 1.0f);
-
-				float4 albedo   = tAlbedo  .Sample(gSampler, i.uv);
-				float3 normal   = normalize(tNormal.Sample(gSampler, i.uv).xyz * 2.0f - 1.0f);
-				float3 emissive = tEmissive.Sample(gSampler, i.uv).rgb;
-
-				float3 viewPos  = ReconstructViewPos(i.uv, depth);
-				float3 worldPos = mul(gInvView, float4(viewPos, 1.0f)).xyz;
-				float  shadow   = SampleShadow(i.uv);
-
-				float3 lighting = emissive + albedo.rgb * 0.15f;
-
-				for (uint k = 0; k < gLightCount; ++k)
-				{
-					float3 L    = gLights[k].pos - worldPos;
-					float  dist = length(L);
-					if (dist >= gLights[k].range) continue;
-					L /= dist;
-					float atten = 1.0f - saturate(dist / gLights[k].range);
-					float NdotL = max(0.0f, dot(normal, L));
-					lighting += albedo.rgb * gLights[k].color
-								* gLights[k].intensity * NdotL * atten * atten * shadow;
-				}
-
-				return float4(saturate(lighting), albedo.a);
-			}
-		)hlsl";
+		static const std::string k_Light_PS_src = loadShaderSource("lighting.ps.hlsl");
+		static const char*       k_Light_PS     = k_Light_PS_src.c_str();
 
 		ShaderDesc vsDesc;
 		vsDesc.stage        = ShaderStage::Vertex;
@@ -1055,75 +619,12 @@ int main()
 			std::cout << "[RT] UAV texture creation failed\n";
 
 		// Step 5: RT シェーダーのコンパイルと RTPSO 作成
-		static const char* k_RayGen = R"hlsl(
-			RaytracingAccelerationStructure Scene    : register(t0);
-			Texture2D<float>                tDepth   : register(t1);
-			RWTexture2D<float4>             Output   : register(u0);
-			SamplerState                    gLinearSampler : register(s0);
-
-			cbuffer RTShadowCB : register(b0)
-			{
-				float4x4 gInvViewProj;
-				float3   gLightPos;
-				float    gLightRange;
-			};
-
-			struct ShadowPayload { float shadowed; };
-
-			[shader("raygeneration")]
-			void RayGen()
-			{
-				uint2  idx  = DispatchRaysIndex().xy;
-				uint2  dim  = DispatchRaysDimensions().xy;
-				float2 uv   = (float2(idx) + 0.5f) / float2(dim);
-
-				float depth = tDepth.SampleLevel(gLinearSampler, uv, 0).r;
-				if (depth >= 0.9999f)
-				{
-					Output[idx] = float4(1, 1, 1, 1);
-					return;
-				}
-
-				// NDC → ワールド座標
-				float4 ndcPos  = float4(uv * float2(2,-2) + float2(-1,1), depth, 1);
-				float4 worldH  = mul(gInvViewProj, ndcPos);
-				float3 worldPos = worldH.xyz / worldH.w;
-
-				// シャドウレイを発射する
-				float3 toLight = gLightPos - worldPos;
-				float  dist    = length(toLight);
-				float3 dir     = toLight / dist;
-
-				RayDesc ray;
-				ray.Origin    = worldPos + dir * 0.01f;
-				ray.Direction = dir;
-				ray.TMin      = 0.001f;
-				ray.TMax      = dist - 0.01f;
-
-				ShadowPayload payload;
-				payload.shadowed = 0.0f;
-				TraceRay(Scene,
-					RAY_FLAG_ACCEPT_FIRST_HIT_AND_END_SEARCH,
-					0xFF, 0, 1, 0, ray, payload);
-
-				float shadow = 1.0f - payload.shadowed;
-				Output[idx] = float4(shadow, shadow, shadow, 1);
-			}
-		)hlsl";
-		static const char* k_Miss = R"hlsl(
-			[shader("miss")]
-			void Miss(inout ShadowPayload payload)
-			{
-				payload.shadowed = 0.0f;
-			}
-		)hlsl";
-		static const char* k_ClosestHit = R"hlsl(
-			[shader("closesthit")]
-			void ClosestHit(inout ShadowPayload payload, in BuiltInTriangleIntersectionAttributes attr)
-			{
-				payload.shadowed = 1.0f;
-			}
-		)hlsl";
+		static const std::string k_RayGen_src = loadShaderSource("rt_shadow.raygen.hlsl");
+		static const char*       k_RayGen     = k_RayGen_src.c_str();
+		static const std::string k_Miss_src = loadShaderSource("rt_shadow.miss.hlsl");
+		static const char*       k_Miss     = k_Miss_src.c_str();
+		static const std::string k_ClosestHit_src = loadShaderSource("rt_shadow.closesthit.hlsl");
+		static const char*       k_ClosestHit     = k_ClosestHit_src.c_str();
 
 		// RTShadowCB: InvViewProj(64) + lightPos(12) + lightRange(4) = 80 bytes
 		BufferHandle rtShadowCB = engine.createBuffer({ 80, BufferUsage::Uniform, nullptr, 0 });
@@ -1252,12 +753,8 @@ int main()
 		checkHandle(gridDepthPipe, "createPipeline(gridDepthPipe) failed");
 
 		// 合成: 解決済みテクスチャ (t0) を Sampler テーブル (s0) で読み、乗算済みアルファで重ねる
-		static const char* k_GridComposite_PS = R"hlsl(
-			Texture2D<float4> gGrid : register(t0);
-			SamplerState      gSmp  : register(s0);
-			struct PSIn { float4 pos : SV_Position; float2 uv : TEXCOORD; };
-			float4 main(PSIn i) : SV_Target { return gGrid.Sample(gSmp, i.uv); }
-		)hlsl";
+		static const std::string k_GridComposite_PS_src = loadShaderSource("grid_composite.ps.hlsl");
+		static const char*       k_GridComposite_PS     = k_GridComposite_PS_src.c_str();
 		ShaderDesc gcPSDesc; gcPSDesc.stage = ShaderStage::Fragment; gcPSDesc.source = k_GridComposite_PS;
 		ShaderHandle gridCompPS = engine.compileShader(gcPSDesc);
 		checkHandle(gridCompPS, "compileShader(gridCompPS) failed");
@@ -1500,27 +997,8 @@ int main()
 		//      手動バリア、copyBuffer / copyTexture、範囲指定のクリア
 		// ---------------------------------------------------
 		{
-			static const char* k_SmokeCS = R"hlsl(
-				cbuffer Params : register(b0) { uint gValue; uint gMode; };
-				RWByteAddressBuffer gOut : register(u0);
-				Texture2D<float4>   gTex : register(t0);
-
-				[numthreads(4, 1, 1)]
-				void main(uint3 id : SV_DispatchThreadID)
-				{
-					if (gMode == 0)
-					{
-						// dispatchIndirect の引数 (2, 1, 1) を書く
-						if (id.x == 0)
-							gOut.Store3(0, uint3(2, 1, 1));
-					}
-					else
-					{
-						float4 c = gTex.Load(int3(id.x, 0, 0));
-						gOut.Store(id.x * 4, gValue + (uint)(c.r * 255.0f));
-					}
-				}
-			)hlsl";
+			static const std::string k_SmokeCS_src = loadShaderSource("smoke.cs.hlsl");
+			static const char*       k_SmokeCS     = k_SmokeCS_src.c_str();
 
 			ShaderDesc csDesc;
 			csDesc.stage  = ShaderStage::Compute;
