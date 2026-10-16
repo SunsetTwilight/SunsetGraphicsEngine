@@ -15,7 +15,7 @@ add_executable(GfxEditor
 )
 
 target_link_libraries(GfxEditor PRIVATE
-    GraphicsEngine
+    gfx_core
     gfx_schema
     gfx_imgui
     gfx_imnodes

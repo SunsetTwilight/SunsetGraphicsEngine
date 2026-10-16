@@ -1,7 +1,7 @@
 # ============================================================
 #  GfxExample  (ディファードレンダリングのサンプル)
 #
-#  GraphicsEngine.lib をスタティックリンクし、
+#  SunsetGraphicsEngine.dll (gfx_core) にリンクし、
 #  gfx_dx12.dll / gfx_vulkan.dll を実行時にロードする。
 # ============================================================
 add_executable(GfxExample
@@ -29,7 +29,7 @@ add_dependencies(GfxExample GfxExample_shaders)
 install(DIRECTORY shaders DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 target_link_libraries(GfxExample PRIVATE
-    GraphicsEngine
+    gfx_core
     gfx_schema
     gfx_options
 )

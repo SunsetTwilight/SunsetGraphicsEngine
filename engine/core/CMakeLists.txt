@@ -1,31 +1,40 @@
 # ============================================================
-#  GraphicsEngine (スタティックライブラリ)
+#  gfx_core → SunsetGraphicsEngine.dll (エンジン本体)
 #
 #  役割:
-#    ・PluginLoader でバックエンド DLL を実行時ロード
-#    ・GraphicsEngine / RenderWindow API をアプリに提供
-#    ・DX12 / Vulkan のヘッダを一切インクルードしない
-#  公開ヘッダー: #include "gfx/core/GraphicsEngine.h"
+#    ・バックエンド DLL (gfx_dx12 など) を実行時ロードし、ABI を照合する
+#    ・デバイス / ウィンドウ / switchAPI の管理
+#  DLL の境界は C ABI (gfx/core/CoreAPI.h)。C++ API (gfx/core/GraphicsEngine.h) は
+#  ヘッダーのみのラッパーで、アプリ側でコンパイルされる。
+#  DX12 / Vulkan のヘッダは一切インクルードしない。
 # ============================================================
-add_library(GraphicsEngine STATIC
-    src/GraphicsEngine.cpp
+add_library(gfx_core SHARED
+    include/gfx/core/CoreAPI.h          # 公開: C ABI
+    include/gfx/core/GraphicsEngine.h   # 公開: ヘッダーのみの C++ ラッパー
+    src/Engine.cpp
+    src/PluginLoader.h                  # 非公開: LoadLibrary / dlopen ラッパー
 )
-add_library(gfx::core ALIAS GraphicsEngine)
+add_library(gfx::core ALIAS gfx_core)
 
-target_include_directories(GraphicsEngine PUBLIC
+set_target_properties(gfx_core PROPERTIES
+    OUTPUT_NAME "SunsetGraphicsEngine"
+    PREFIX      ""          # Linux / macOS でも lib プレフィックスを付けない
+)
+
+target_include_directories(gfx_core PUBLIC
     "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
     "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>"
 )
 
-target_link_libraries(GraphicsEngine
+target_link_libraries(gfx_core
     PUBLIC  gfx_abi
     PRIVATE gfx_options
 )
 
-# Linux / macOS: dlopen は libdl にある
-if(UNIX)
-    target_link_libraries(GraphicsEngine PUBLIC dl)
-endif()
+target_compile_definitions(gfx_core PRIVATE GFX_CORE_BUILDING_DLL)
 
-install(TARGETS GraphicsEngine ARCHIVE DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-install(DIRECTORY include/ DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}" FILES_MATCHING PATTERN "*.h")
+if(UNIX)
+    # dlopen は libdl にある。C ABI 以外のシンボルは公開しない
+    target_link_libraries(gfx_core PRIVATE dl)
+    target_compile_options(gfx_core PRIVATE -fvisibility=hidden)
+endif()
