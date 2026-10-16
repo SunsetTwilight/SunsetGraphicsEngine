@@ -9,6 +9,8 @@
 //  エディターのプロパティインスペクター、JSON シリアライザー、差分表示は
 //  この表をたどって汎用的に作る (構造体ごとの手書きのコードは書かない)。
 //
+//  JSON との変換は gfx/schema/GfxJson.h。
+//
 //  使い方:
 //    const GfxStructInfo* si = gfxStructInfo<GfxGraphicsPipelineDesc>();
 //    for (uint32_t i = 0; i < si->fieldCount; ++i) {
@@ -74,6 +76,7 @@ struct GfxStructInfo
 	uint32_t            size;         // sizeof
 	const GfxFieldInfo* fields;
 	uint32_t            fieldCount;
+	const void*         defaultValue; // 既定値で初期化したインスタンス (JSON で既定値を省くときの比較に使う)
 };
 
 // ---- 型 → メタデータの対応 ---------------------------------
@@ -127,84 +130,128 @@ template<typename T> inline const GfxStructInfo* gfxStructInfo() { return GfxTyp
 			using Self = Type;                                                                   \
 			static const GfxFieldInfo fields[] = {                                               \
 				GFX_FIELDS_##Type(GFX_SCHEMA_FIELD, GFX_SCHEMA_ARRAY) };                         \
+			static const Type          defaultValue{};                                           \
 			static const GfxStructInfo info = { #Type, static_cast<uint32_t>(sizeof(Type)),      \
-				fields, static_cast<uint32_t>(sizeof(fields) / sizeof(fields[0])) };             \
+				fields, static_cast<uint32_t>(sizeof(fields) / sizeof(fields[0])), &defaultValue }; \
 			return &info;                                                                        \
 		}                                                                                        \
 	};
 
 // ---- 列挙型 ------------------------------------------------
-GFX_SCHEMA_ENUM (GfxFormat)
-GFX_SCHEMA_ENUM (GfxBlend)
-GFX_SCHEMA_ENUM (GfxBlendOp)
-GFX_SCHEMA_ENUM (GfxLogicOp)
-GFX_SCHEMA_FLAGS(GfxColorWriteMask)
-GFX_SCHEMA_ENUM (GfxFillMode)
-GFX_SCHEMA_ENUM (GfxCullMode)
-GFX_SCHEMA_ENUM (GfxConservativeRaster)
-GFX_SCHEMA_ENUM (GfxCompareFunc)
-GFX_SCHEMA_ENUM (GfxDepthWriteMask)
-GFX_SCHEMA_ENUM (GfxStencilOp)
-GFX_SCHEMA_ENUM (GfxInputClassification)
-GFX_SCHEMA_ENUM (GfxIndexBufferStripCut)
-GFX_SCHEMA_ENUM (GfxPrimitiveTopologyType)
-GFX_SCHEMA_ENUM (GfxPrimitiveTopology)
-GFX_SCHEMA_FLAGS(GfxPipelineStateFlags)
-GFX_SCHEMA_ENUM (GfxDescriptorRangeType)
-GFX_SCHEMA_FLAGS(GfxDescriptorRangeFlags)
-GFX_SCHEMA_ENUM (GfxRootParameterType)
-GFX_SCHEMA_ENUM (GfxShaderVisibility)
-GFX_SCHEMA_FLAGS(GfxRootDescriptorFlags)
-GFX_SCHEMA_FLAGS(GfxRootSignatureFlags)
-GFX_SCHEMA_ENUM (GfxFilter)
-GFX_SCHEMA_ENUM (GfxTextureAddressMode)
-GFX_SCHEMA_ENUM (GfxStaticBorderColor)
-GFX_SCHEMA_ENUM (GfxQueryType)
-GFX_SCHEMA_ENUM (GfxResourceKind)
-GFX_SCHEMA_FLAGS(GfxResourceState)
-GFX_SCHEMA_ENUM (GfxBarrierType)
-GFX_SCHEMA_FLAGS(GfxClearFlags)
-GFX_SCHEMA_ENUM (GfxDescriptorType)
-GFX_SCHEMA_ENUM (GfxTextureDimension)
-GFX_SCHEMA_FLAGS(GfxTextureUsage)
-GFX_SCHEMA_ENUM (GfxViewType)
-GFX_SCHEMA_ENUM (GfxViewDimension)
-GFX_SCHEMA_FLAGS(GfxDSVFlags)
-GFX_SCHEMA_ENUM (GfxShaderInputType)
-GFX_SCHEMA_ENUM (GfxShaderResourceDimension)
-GFX_SCHEMA_ENUM (GfxShaderVariableClass)
-GFX_SCHEMA_ENUM (GfxShaderVariableType)
-GFX_SCHEMA_ENUM (GfxRegisterComponentType)
-GFX_SCHEMA_ENUM (GfxSystemValue)
+// GFX_SCHEMA_ENUM_LIST(E, FL): E = 通常の列挙型、FL = ビットフラグ
+#define GFX_SCHEMA_ENUM_LIST(E, FL) \
+	E (GfxFormat) \
+	E (GfxBlend) \
+	E (GfxBlendOp) \
+	E (GfxLogicOp) \
+	FL(GfxColorWriteMask) \
+	E (GfxFillMode) \
+	E (GfxCullMode) \
+	E (GfxConservativeRaster) \
+	E (GfxCompareFunc) \
+	E (GfxDepthWriteMask) \
+	E (GfxStencilOp) \
+	E (GfxInputClassification) \
+	E (GfxIndexBufferStripCut) \
+	E (GfxPrimitiveTopologyType) \
+	E (GfxPrimitiveTopology) \
+	FL(GfxPipelineStateFlags) \
+	E (GfxDescriptorRangeType) \
+	FL(GfxDescriptorRangeFlags) \
+	E (GfxRootParameterType) \
+	E (GfxShaderVisibility) \
+	FL(GfxRootDescriptorFlags) \
+	FL(GfxRootSignatureFlags) \
+	E (GfxFilter) \
+	E (GfxTextureAddressMode) \
+	E (GfxStaticBorderColor) \
+	E (GfxQueryType) \
+	E (GfxResourceKind) \
+	FL(GfxResourceState) \
+	E (GfxBarrierType) \
+	FL(GfxClearFlags) \
+	E (GfxDescriptorType) \
+	E (GfxTextureDimension) \
+	FL(GfxTextureUsage) \
+	E (GfxViewType) \
+	E (GfxViewDimension) \
+	FL(GfxDSVFlags) \
+	E (GfxShaderInputType) \
+	E (GfxShaderResourceDimension) \
+	E (GfxShaderVariableClass) \
+	E (GfxShaderVariableType) \
+	E (GfxRegisterComponentType) \
+	E (GfxSystemValue)
 
-// ---- 構造体 (入れ子の内側から) -----------------------------
-GFX_SCHEMA_STRUCT(GfxRenderTargetBlendDesc)
-GFX_SCHEMA_STRUCT(GfxBlendDesc)
-GFX_SCHEMA_STRUCT(GfxRasterizerDesc)
-GFX_SCHEMA_STRUCT(GfxStencilOpDesc)
-GFX_SCHEMA_STRUCT(GfxDepthStencilStateDesc)
-GFX_SCHEMA_STRUCT(GfxInputElementDesc)
-GFX_SCHEMA_STRUCT(GfxInputLayoutDesc)
-GFX_SCHEMA_STRUCT(GfxGraphicsPipelineDesc)
-GFX_SCHEMA_STRUCT(GfxDescriptorRange)
-GFX_SCHEMA_STRUCT(GfxRootParameter)
-GFX_SCHEMA_STRUCT(GfxStaticSamplerDesc)
-GFX_SCHEMA_STRUCT(GfxBindingLayoutDesc)
-GFX_SCHEMA_STRUCT(GfxComputePipelineDesc)
-GFX_SCHEMA_STRUCT(GfxQueryPoolDesc)
-GFX_SCHEMA_STRUCT(GfxResourceRef)
-GFX_SCHEMA_STRUCT(GfxBarrierDesc)
-GFX_SCHEMA_STRUCT(GfxViewport)
-GFX_SCHEMA_STRUCT(GfxRect)
-GFX_SCHEMA_STRUCT(GfxClearValue)
-GFX_SCHEMA_STRUCT(GfxTextureResourceDesc)
-GFX_SCHEMA_STRUCT(GfxViewDesc)
-GFX_SCHEMA_STRUCT(GfxSamplerStateDesc)
-GFX_SCHEMA_STRUCT(GfxShaderBinding)
-GFX_SCHEMA_STRUCT(GfxShaderCBuffer)
-GFX_SCHEMA_STRUCT(GfxShaderVariable)
-GFX_SCHEMA_STRUCT(GfxShaderSignatureParam)
-GFX_SCHEMA_STRUCT(GfxShaderReflection)
+// ---- 構造体 (入れ子の内側から並べる) -----------------------
+#define GFX_SCHEMA_STRUCT_LIST(S) \
+	S(GfxRenderTargetBlendDesc) \
+	S(GfxBlendDesc) \
+	S(GfxRasterizerDesc) \
+	S(GfxStencilOpDesc) \
+	S(GfxDepthStencilStateDesc) \
+	S(GfxInputElementDesc) \
+	S(GfxInputLayoutDesc) \
+	S(GfxGraphicsPipelineDesc) \
+	S(GfxDescriptorRange) \
+	S(GfxRootParameter) \
+	S(GfxStaticSamplerDesc) \
+	S(GfxBindingLayoutDesc) \
+	S(GfxComputePipelineDesc) \
+	S(GfxQueryPoolDesc) \
+	S(GfxResourceRef) \
+	S(GfxBarrierDesc) \
+	S(GfxViewport) \
+	S(GfxRect) \
+	S(GfxClearValue) \
+	S(GfxTextureResourceDesc) \
+	S(GfxViewDesc) \
+	S(GfxSamplerStateDesc) \
+	S(GfxShaderBinding) \
+	S(GfxShaderCBuffer) \
+	S(GfxShaderVariable) \
+	S(GfxShaderSignatureParam) \
+	S(GfxShaderReflection)
+
+GFX_SCHEMA_ENUM_LIST(GFX_SCHEMA_ENUM, GFX_SCHEMA_FLAGS)
+GFX_SCHEMA_STRUCT_LIST(GFX_SCHEMA_STRUCT)
+
+// ---- 登録されているすべての型 (エディターの型の一覧や、名前からの検索に使う) ----
+#define GFX_SCHEMA_ENUM_PTR(Type)   GfxTypeInfo<Type>::enumInfo(),
+#define GFX_SCHEMA_STRUCT_PTR(Type) GfxTypeInfo<Type>::structInfo(),
+
+inline const GfxEnumInfo* const* gfxAllEnumInfos(uint32_t& count)
+{
+	static const GfxEnumInfo* const list[] = { GFX_SCHEMA_ENUM_LIST(GFX_SCHEMA_ENUM_PTR, GFX_SCHEMA_ENUM_PTR) };
+	count = static_cast<uint32_t>(sizeof(list) / sizeof(list[0]));
+	return list;
+}
+inline const GfxStructInfo* const* gfxAllStructInfos(uint32_t& count)
+{
+	static const GfxStructInfo* const list[] = { GFX_SCHEMA_STRUCT_LIST(GFX_SCHEMA_STRUCT_PTR) };
+	count = static_cast<uint32_t>(sizeof(list) / sizeof(list[0]));
+	return list;
+}
+
+// 名前で型を探す (見つからなければ nullptr)
+inline const GfxStructInfo* gfxFindStructInfo(const char* name)
+{
+	uint32_t n = 0;
+	const GfxStructInfo* const* list = gfxAllStructInfos(n);
+	for (uint32_t i = 0; name && i < n; ++i)
+		if (std::strcmp(list[i]->name, name) == 0)
+			return list[i];
+	return nullptr;
+}
+inline const GfxEnumInfo* gfxFindEnumInfo(const char* name)
+{
+	uint32_t n = 0;
+	const GfxEnumInfo* const* list = gfxAllEnumInfos(n);
+	for (uint32_t i = 0; name && i < n; ++i)
+		if (std::strcmp(list[i]->name, name) == 0)
+			return list[i];
+	return nullptr;
+}
 
 // ---- 汎用アクセス ------------------------------------------
 

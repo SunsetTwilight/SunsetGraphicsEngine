@@ -1,7 +1,7 @@
 # ============================================================
 #  自動テスト (doctest + CTest)
 #
-#    gfx_tests_unit    GPU 不要 (ABI 情報、フラグ判定、スキーマの表)
+#    gfx_tests_unit    GPU 不要 (ABI 情報、フラグ判定、スキーマの表、JSON)
 #    gfx_tests_render  ヘッドレスのオフスクリーン描画 (デバッグレイヤーのメッセージ 0 件) とシェーダー (DXC / リフレクション)
 #                      環境変数 GFX_TEST_ADAPTER=software で WARP を使う (GPU のない CI 用)
 #    gfx_tests_reject  ABI の合わないバックエンド DLL が拒否されることを確認する
@@ -27,6 +27,7 @@ target_include_directories(gfx_doctest SYSTEM INTERFACE "${doctest_SOURCE_DIR}")
 add_executable(gfx_tests_unit
     doctest_main.cpp
     test_abi.cpp
+    test_json.cpp       # JSON のパース / 文字列化、記述子 ⇔ JSON
 )
 target_link_libraries(gfx_tests_unit PRIVATE
     SunsetGraphicsEngine::abi SunsetGraphicsEngine::schema gfx_doctest gfx_options)
