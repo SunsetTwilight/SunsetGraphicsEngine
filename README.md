@@ -22,23 +22,37 @@ DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジ�
 
 ```
 GraphicsEngine/
-├── CMakeLists.txt              ← ルート (単一ファイル構成)
-├── CMakePresets.json           ← Ninja / VS2022 / Linux プリセット
-├── include/
-│   ├── GfxBackendABI.h         ← DLL 境界 C ABI (SwapChain / RT / DS 分離、v2 記述子)
-│   ├── GfxSchema.h             ← v2 記述子のフィールドのメタデータ表 (X マクロから生成)
-│   ├── GraphicsEngine.h        ← アプリ向け統合 API
-│   └── PluginLoader.h          ← LoadLibrary / dlopen ラッパー
-├── src/
-│   └── GraphicsEngine.cpp      ← エンジン本体 (スタティックライブラリ)
-├── plugins/
-│   ├── dx12/
-│   │   └── DX12Backend.cpp     ← gfx_dx12.dll (Windows 専用)
-│   └── vulkan/
-│       └── VulkanBackend.cpp   ← gfx_vulkan.dll / .so / .dylib
-└── examples/
-    └── main.cpp                ← 使用例 (Forward / Deferred / Shadow)
+├── CMakeLists.txt                  ← ルート (オプションと add_subdirectory のみ)
+├── CMakePresets.json               ← Ninja / VS2022 / Linux プリセット
+├── cmake/                          ← 共通の警告・定義、DXC の検出、外部ライブラリ (FetchContent)
+├── engine/
+│   ├── abi/include/gfx/abi/        ← DLL 境界の C ABI (gfx_abi、ヘッダーのみ)
+│   │     GfxBackendABI.h           ←   まとめて読み込むヘッダー
+│   │     Types / PipelineState / Commands / Resources / Compat / Interfaces / Device / Plugin .h
+│   ├── schema/include/gfx/schema/  ← v2 記述子のメタデータ表 (gfx_schema、ヘッダーのみ)
+│   ├── core/                       ← GraphicsEngine.lib (プラグインのロード、RenderWindow)
+│   └── rendergraph/                ← Phase 3 (未実装)
+├── backends/
+│   ├── dx12/                       ← gfx_dx12.dll (責務ごとに分割: Device / CommandBuffer / Resources / ...)
+│   └── vulkan/                     ← gfx_vulkan (現在はビルド対象外)
+├── samples/deferred/               ← GfxExample (ディファードレンダリングのサンプル)
+│   └── shaders/                    ←   HLSL (ビルド時に bin/shaders/ にコピー)
+├── editor/                         ← GfxEditor (Phase 4。現在は依存ライブラリの確認用スタブ)
+├── shaders/                        ← 共有 HLSL (未使用)
+├── assets/                         ← レンダーグラフ / パイプラインの JSON (Phase 3 以降)
+├── tests/                          ← 自動テスト (未実装)
+├── tools/                          ← 開発用スクリプト (check-sample.ps1)
+└── docs/design/                    ← 設計ドキュメント
 ```
+
+依存の向きは次のとおりです。CMake のターゲットのリンク関係で強制しています。
+
+- `engine/abi` は何にも依存しません。
+- `backends/*` は `engine/abi` にだけ依存します (`engine/core` は参照しません)。
+- `engine/schema` と `engine/core` は `engine/abi` に依存します。
+- `samples/*` と `editor` は `engine/core` と `engine/schema` に依存し、バックエンドは実行時にロードします。
+
+公開ヘッダーは `#include "gfx/<モジュール>/<ファイル>.h"` の形で読み込みます (例: `#include "gfx/core/GraphicsEngine.h"`)。
 
 ---
 
@@ -112,6 +126,7 @@ cmake --build build/release
 | `GFX_BUILD_DX12` | `WIN32` | DirectX 12 バックエンド DLL をビルドする |
 | `GFX_BUILD_VULKAN` | `OFF` | Vulkan バックエンド DLL をビルドする (現在はビルド不可。上記「対応状況」を参照) |
 | `GFX_BUILD_EXAMPLE` | `ON` | サンプルアプリ `GfxExample` をビルドする |
+| `GFX_BUILD_EDITOR` | `OFF` | エディター `GfxEditor` をビルドする。初回の configure 時に ImGui / imnodes / nlohmann_json をダウンロードする |
 | `GFX_ENABLE_VALIDATION` | `OFF` | GPU バリデーション / デバッグレイヤーを有効にする |
 | `GFX_DXC_DIR` | *(空)* | DXC のルートディレクトリ (HLSL → DXIL コンパイルを有効化) |
 
@@ -139,6 +154,8 @@ cmake --preset windows-debug ^
 ```
 build/<プリセット>/bin/
 ├── GfxExample.exe        ← サンプルアプリ (Windows)
+├── shaders/              ← サンプルの HLSL
+├── GfxEditor.exe         ← エディター (GFX_BUILD_EDITOR=ON のとき)
 ├── GfxExample            ← サンプルアプリ (Linux)
 ├── gfx_dx12.dll          ← DX12 バックエンド (Windows)
 ├── gfx_vulkan.dll        ← Vulkan バックエンド (Windows)
@@ -182,7 +199,7 @@ build/<プリセット>/bin/
 
 ### ABI バージョン
 
-`GfxBackendABI.h` の vtable や構造体を変更したら、`GFX_ABI_VERSION` を上げてください。
+`engine/abi/include/gfx/abi/` の vtable や構造体を変更したら、`GFX_ABI_VERSION` を上げてください。
 `PluginLoader` は、ABI のバージョンと構造体のサイズが一致しない DLL を読み込みません。
 
 ABI v2 の記述子 (`GfxGraphicsPipelineDesc` / `GfxBindingLayoutDesc`) は先頭に `structSize` と `version` を持ち、
@@ -206,6 +223,12 @@ ABI v2 の記述子 (`GfxGraphicsPipelineDesc` / `GfxBindingLayoutDesc`) は先�
 
 `GFX_ENABLE_VALIDATION=ON` でビルドすると、D3D12 デバッグレイヤーのエラーと警告が stderr にも出力されます。
 
+通常の実行とリサイズテストをまとめて確認するには、次のスクリプトを使います (D3D12 のメッセージが 0 件なら成功)。
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools/check-sample.ps1 -BinDir build/windows-debug/bin
+```
+
 ---
 
 ## インストール
@@ -217,6 +240,6 @@ cmake --install build/linux-release --prefix /usr/local
 | インストール先 | 内容 |
 |---------------|------|
 | `<prefix>/lib/` | `libGraphicsEngine.a` |
-| `<prefix>/include/GraphicsEngine/` | ヘッダファイル |
+| `<prefix>/include/gfx/` | ヘッダファイル (`gfx/abi`、`gfx/schema`、`gfx/core`) |
 | `<prefix>/bin/` | DLL (Windows) |
 | `<prefix>/lib/` | 共有ライブラリ (Linux / macOS)。エンジンは実行ファイルと同じディレクトリと `<exe>/../lib` を探索します |

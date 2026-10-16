@@ -35,6 +35,23 @@
 └──────────────────────────────────────────────────────────┘
 ```
 
+### ディレクトリと CMake ターゲットの対応
+
+| レイヤー | ディレクトリ | ターゲット | 依存してよいもの |
+|---------|-------------|-----------|-----------------|
+| Editor | `editor/` | `GfxEditor` | core、schema、rendergraph、外部ライブラリ (ImGui / imnodes / json) |
+| Render Graph | `engine/rendergraph/` | (Phase 3) | core、schema |
+| GraphicsEngine | `engine/core/` | `GraphicsEngine` | abi |
+| スキーマ | `engine/schema/` | `gfx_schema` | abi |
+| Backend ABI | `engine/abi/` | `gfx_abi` | なし |
+| バックエンド | `backends/dx12/`、`backends/vulkan/` | `gfx_dx12`、`gfx_vulkan` | abi のみ |
+| サンプル | `samples/<名前>/` | `GfxExample` など | core、schema |
+
+- 公開ヘッダーは各モジュールの `include/gfx/<モジュール>/` に置き、`#include "gfx/<モジュール>/..."` で読み込む。
+- バックエンドとエディターが直接依存しないことが、ABI の網羅性を保つための前提になる。エディターで必要な機能は、必ず ABI に追加してから使う。
+- 外部ライブラリは `cmake/GfxDependencies.cmake` で FetchContent を使って取得し、バージョンはそこで固定する。
+- シェーダーは `.hlsl` ファイルとして置く(共有するものは `shaders/`、サンプル固有のものは `samples/<名前>/shaders/`)。ビルド時に `bin/shaders/` にコピーし、実行時に読み込む。エディターのホットリロードはこの仕組みの上に作る。
+
 ---
 
 ## Phase 1:土台の修正(完了)
@@ -60,14 +77,14 @@ Phase 1 の静的ディスクリプタ領域は、Phase 2 でそのまま**バ�
 
 | 項目 | 内容 |
 |------|------|
-| 記述子 | `GfxGraphicsPipelineDesc`(`D3D12_GRAPHICS_PIPELINE_STATE_DESC`)と `GfxBindingLayoutDesc`(`D3D12_ROOT_SIGNATURE_DESC1`)。入れ子の構造体と列挙型はすべて `GfxBackendABI.h` |
+| 記述子 | `GfxGraphicsPipelineDesc`(`D3D12_GRAPHICS_PIPELINE_STATE_DESC`)と `GfxBindingLayoutDesc`(`D3D12_ROOT_SIGNATURE_DESC1`)。入れ子の構造体と列挙型はすべて `gfx/abi/PipelineState.h` |
 | ABI | `createBindingLayout` / `destroyBindingLayout` / `createGraphicsPipeline` を vtable の末尾に追加。`GFX_ABI_VERSION` は 3 |
 | 未対応のメンバー | `StreamOutput`、`CachedPSO`(必要になったら末尾に追加する) |
 | 可変長の配列 | 固定長配列 + 個数(入力要素 16、ルートパラメータ 16、レンジ 32、静的サンプラー 16)。テーブルは `ranges[]` を `firstRange` / `numRanges` で参照する |
 | 寿命 | パイプラインはルートシグネチャへの参照を自分で持つので、バインディングレイアウトは先に破棄してよい |
 | 既存コマンドとの対応 | `bindTexture` / `bindSampler` は SRV だけ / Sampler だけのレンジを持つ最初のテーブルに、`bindUniformBuffer(reg)` は space 0 のルート CBV に対応付ける。ルート定数、ルート SRV/UAV、混在テーブルを設定するコマンドは Phase 2b |
 | v1 | `GfxPipelineDesc` は互換レイヤーとして残した。`gfxConvertPipelineDesc` / `gfxConvertRootSignature`(ヘッダー内)で v2 に変換し、DLL 内で v2 の経路で作成する |
-| スキーマ | `GfxSchema.h`。`GFX_FIELDS_<型名>` / `GFX_ENUM_<型名>` の X マクロから、構造体の定義と同じ情報源でフィールド表と列挙子の表を生成する(2c の「スキーマの X マクロ」を先に入れた) |
+| スキーマ | `gfx/schema/GfxSchema.h`。`GFX_FIELDS_<型名>` / `GFX_ENUM_<型名>` の X マクロから、構造体の定義と同じ情報源でフィールド表と列挙子の表を生成する(2c の「スキーマの X マクロ」を先に入れた) |
 | 値の対応 | 列挙値は D3D12 の値と同じ。DX12 バックエンドは `static_cast` で渡し、代表値を `static_assert` で照合している |
 
 ### Phase 2b の実装状況(完了)
