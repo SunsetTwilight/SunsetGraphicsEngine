@@ -26,4 +26,4 @@
 // ============================================================
 
 // ABI 全体を読み込む。各パートの内容は以下のヘッダーを参照。
-#include "Plugin.h"   // Types → PipelineState → Commands → Resources → Compat → Interfaces → Device → Plugin
+#include "Plugin.h"   // Types → PipelineState → Commands → Resources → Compat → ShaderReflection → Interfaces → Device → Plugin

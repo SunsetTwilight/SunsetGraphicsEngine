@@ -405,6 +405,14 @@ static const GfxDeviceVTable k_DX12DevVTable =
 	{
 		return static_cast<DX12DeviceImpl*>(s)->createSamplerState(d);
 	},
+	[](void* s, ShaderHandle h, GfxShaderReflection* out) -> bool
+	{
+		return static_cast<DX12DeviceImpl*>(s)->getShaderReflection(h, out);
+	},
+	[](void* s, ShaderHandle h, char* buffer, uint32_t bufferSize) -> uint32_t
+	{
+		return static_cast<DX12DeviceImpl*>(s)->getShaderDependencies(h, buffer, bufferSize);
+	},
 };
 const GfxDeviceVTable* DX12DeviceImpl::getVTable() { return &k_DX12DevVTable; }
 

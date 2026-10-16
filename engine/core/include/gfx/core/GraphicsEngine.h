@@ -274,6 +274,41 @@ public:
 	BufferHandle   createBuffer  (const BufferDesc&     d) { auto* p = device(); return p ? p->createBuffer(d)   : BufferHandle{};   }
 	TextureHandle  createTexture (const TextureDesc&    d) { auto* p = device(); return p ? p->createTexture(d)  : TextureHandle{};  }
 	ShaderHandle   compileShader (const ShaderDesc&     d) { auto* p = device(); return p ? p->compileShader(d)  : ShaderHandle{};   }
+
+	// シェーダーのリフレクション (out は大きいのでヒープに置くこと)。リフレクションがなければ false
+	bool getShaderReflection(ShaderHandle h, GfxShaderReflection& out)
+	{
+		auto* p = device();
+		out.structSize = static_cast<uint32_t>(sizeof(GfxShaderReflection));
+		return p && p->getShaderReflection(h, out);
+	}
+	// シェーダーが #include で読み込んだファイルのパス (ホットリロードの監視対象)
+	std::vector<std::string> shaderDependencies(ShaderHandle h)
+	{
+		std::vector<std::string> result;
+		auto* p = device();
+		if (!p)
+			return result;
+		const uint32_t size = p->getShaderDependencies(h, nullptr, 0);
+		if (size <= 1)
+			return result;
+		std::string buf(size, '\0');
+		if (p->getShaderDependencies(h, buf.data(), size) != size)
+			return result;
+		buf.resize(size - 1);
+		size_t start = 0;
+		while (start <= buf.size())
+		{
+			const size_t end = buf.find('\n', start);
+			const std::string line = buf.substr(start, end == std::string::npos ? std::string::npos : end - start);
+			if (!line.empty())
+				result.push_back(line);
+			if (end == std::string::npos)
+				break;
+			start = end + 1;
+		}
+		return result;
+	}
 	SamplerHandle  createSampler (const GfxSamplerDesc& d) { auto* p = device(); return p ? p->createSampler(d)  : SamplerHandle{};  }
 	PipelineHandle createPipeline(const GfxPipelineDesc& d) { auto* p = device(); return p ? p->createPipeline(d) : PipelineHandle{}; }
 	// ABI v2: D3D12 の構造体と同じ粒度の記述子

@@ -170,6 +170,12 @@ GFX_SCHEMA_FLAGS(GfxTextureUsage)
 GFX_SCHEMA_ENUM (GfxViewType)
 GFX_SCHEMA_ENUM (GfxViewDimension)
 GFX_SCHEMA_FLAGS(GfxDSVFlags)
+GFX_SCHEMA_ENUM (GfxShaderInputType)
+GFX_SCHEMA_ENUM (GfxShaderResourceDimension)
+GFX_SCHEMA_ENUM (GfxShaderVariableClass)
+GFX_SCHEMA_ENUM (GfxShaderVariableType)
+GFX_SCHEMA_ENUM (GfxRegisterComponentType)
+GFX_SCHEMA_ENUM (GfxSystemValue)
 
 // ---- 構造体 (入れ子の内側から) -----------------------------
 GFX_SCHEMA_STRUCT(GfxRenderTargetBlendDesc)
@@ -194,6 +200,11 @@ GFX_SCHEMA_STRUCT(GfxClearValue)
 GFX_SCHEMA_STRUCT(GfxTextureResourceDesc)
 GFX_SCHEMA_STRUCT(GfxViewDesc)
 GFX_SCHEMA_STRUCT(GfxSamplerStateDesc)
+GFX_SCHEMA_STRUCT(GfxShaderBinding)
+GFX_SCHEMA_STRUCT(GfxShaderCBuffer)
+GFX_SCHEMA_STRUCT(GfxShaderVariable)
+GFX_SCHEMA_STRUCT(GfxShaderSignatureParam)
+GFX_SCHEMA_STRUCT(GfxShaderReflection)
 
 // ---- 汎用アクセス ------------------------------------------
 

@@ -914,6 +914,11 @@ ShaderHandle DX12DeviceImpl::compileShader(const GfxShaderDesc* desc)
 			return {};
 		sh.bytecode     = std::move(out.bytecode);
 		sh.dependencies = std::move(out.dependencies);
+		if (out.reflection)
+		{
+			const uint8_t* r = static_cast<const uint8_t*>(out.reflection->GetBufferPointer());
+			sh.reflection.assign(r, r + out.reflection->GetBufferSize());
+		}
 	}
 	else if (desc->bytecode && desc->bytecodeSize > 0)
 	{

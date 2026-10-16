@@ -12,45 +12,17 @@
 #include <doctest/doctest.h>
 #include "gfx/core/GraphicsEngine.h"
 
+#include "TestCommon.h"
+
 #include <chrono>
-#include <cstdlib>
 #include <string>
 #include <thread>
 #include <vector>
 
+using namespace gfxtest;
+
 namespace
 {
-bool useSoftwareAdapter()
-{
-	char   buf[32] = {};
-	size_t len     = 0;
-	return getenv_s(&len, buf, sizeof(buf), "GFX_TEST_ADAPTER") == 0 && len > 0
-		&& std::string(buf) == "software";
-}
-
-// デバッグメッセージを数える
-struct MessageLog
-{
-	std::vector<std::string> problems;   // Corruption / Error / Warning
-	std::vector<std::string> infos;
-};
-
-DeviceConfig makeConfig(MessageLog& log)
-{
-	DeviceConfig cfg;
-	cfg.appName    = "gfx_tests_render";
-	cfg.validation = true;
-	cfg.adapter    = useSoftwareAdapter() ? GfxAdapterType::Software : GfxAdapterType::Hardware;
-	cfg.debugMessage = [&log](GfxMessageSeverity sev, int32_t id, const char* text) {
-		std::string s = "#" + std::to_string(id) + " " + text;
-		if (sev <= GfxMessageSeverity::Warning)
-			log.problems.push_back(std::move(s));
-		else
-			log.infos.push_back(std::move(s));
-	};
-	return cfg;
-}
-
 const char* k_VS = R"hlsl(
 float4 main(uint id : SV_VertexID) : SV_Position
 {
@@ -69,9 +41,9 @@ TEST_CASE("ヘッドレスでオフスクリーンに描画しても D3D12 の�
 {
 	MessageLog     log;
 	GraphicsEngine engine;
-	REQUIRE_MESSAGE(engine.init(makeConfig(log)), engine.lastError());
+	REQUIRE_MESSAGE(engine.init(makeConfig(log, "gfx_tests_render")), engine.lastError());
 	MESSAGE("adapter: ", engine.adapterName());
-	for (const auto& s : log.infos)
+	for (const auto& s : log.infos())
 		MESSAGE("info: ", s);
 
 	// ---- リソース ----
@@ -168,7 +140,8 @@ TEST_CASE("ヘッドレスでオフスクリーンに描画しても D3D12 の�
 	engine.destroyRenderTarget(rt);
 	engine.shutdown();
 
-	for (const auto& s : log.problems)
+	const auto problems = log.problems();
+	for (const auto& s : problems)
 		MESSAGE("D3D12: ", s);
-	CHECK(log.problems.empty());
+	CHECK(problems.empty());
 }

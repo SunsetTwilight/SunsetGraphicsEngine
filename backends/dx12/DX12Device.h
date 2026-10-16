@@ -79,6 +79,10 @@ public:
 	ViewHandle    createView           (const GfxViewDesc* desc);
 	void          destroyView          (ViewHandle h);
 	SamplerHandle createSamplerState   (const GfxSamplerStateDesc* desc);
+
+	// ---- ABI 7: シェーダーのリフレクション ----
+	bool     getShaderReflection  (ShaderHandle h, GfxShaderReflection* out);
+	uint32_t getShaderDependencies(ShaderHandle h, char* buffer, uint32_t bufferSize);
 	bool          checkSampleCount     (DXGI_FORMAT fmt, uint32_t count, uint32_t quality, const char* fn);
 	bool          uploadSubresource0   (ID3D12Resource* res, DXGI_FORMAT fmt, uint32_t width, uint32_t height,
 	                                    const void* data, uint32_t rowPitch, D3D12_RESOURCE_STATES finalState);

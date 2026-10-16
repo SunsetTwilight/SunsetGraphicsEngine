@@ -2,7 +2,7 @@
 #  自動テスト (doctest + CTest)
 #
 #    gfx_tests_unit    GPU 不要 (ABI 情報、フラグ判定、スキーマの表)
-#    gfx_tests_render  ヘッドレスのオフスクリーン描画。デバッグレイヤーのメッセージ 0 件を確認する
+#    gfx_tests_render  ヘッドレスのオフスクリーン描画 (デバッグレイヤーのメッセージ 0 件) とシェーダー (DXC / リフレクション)
 #                      環境変数 GFX_TEST_ADAPTER=software で WARP を使う (GPU のない CI 用)
 #    gfx_tests_reject  ABI の合わないバックエンド DLL が拒否されることを確認する
 #
@@ -35,7 +35,9 @@ add_test(NAME unit COMMAND gfx_tests_unit)
 # ---- 描画テスト (GPU または WARP) ----
 add_executable(gfx_tests_render
     doctest_main.cpp
+    TestCommon.h
     test_render.cpp
+    test_shader.cpp     # DXC / リフレクション / #include
 )
 target_link_libraries(gfx_tests_render PRIVATE
     SunsetGraphicsEngine::core gfx_doctest gfx_options)

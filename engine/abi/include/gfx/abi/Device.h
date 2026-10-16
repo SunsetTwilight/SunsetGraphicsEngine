@@ -89,6 +89,13 @@ struct GfxDeviceVTable {
 	ViewHandle    (*createView)           (void* self, const GfxViewDesc* desc);
 	void          (*destroyView)          (void* self, ViewHandle h);
 	SamplerHandle (*createSamplerState)   (void* self, const GfxSamplerStateDesc* desc);
+
+	// ---- ABI 7: シェーダーのリフレクション ----
+	// out->structSize までを書く (呼び出し側が structSize を設定する)。リフレクションがなければ false
+	bool     (*getShaderReflection)  (void* self, ShaderHandle h, GfxShaderReflection* out);
+	// #include で読み込んだファイルのパスを改行 ('\n') 区切りで buffer に書く ('\0' 終端)。
+	// 戻り値は必要なバイト数 ('\0' を含む)。bufferSize が足りなければ何も書かない (buffer = nullptr で問い合わせ)
+	uint32_t (*getShaderDependencies)(void* self, ShaderHandle h, char* buffer, uint32_t bufferSize);
 };
 
 // ============================================================
@@ -147,6 +154,8 @@ struct IBackendPlugin {
 	ViewHandle          createView          (const GfxViewDesc& d)             { return vtable->createView(self, &d);             }
 	void                destroyView         (ViewHandle h)                     { vtable->destroyView(self, h);                    }
 	SamplerHandle       createSampler       (const GfxSamplerStateDesc& d)     { return vtable->createSamplerState(self, &d);     }
+	bool                getShaderReflection (ShaderHandle h, GfxShaderReflection& out) { return vtable->getShaderReflection(self, h, &out); }
+	uint32_t            getShaderDependencies(ShaderHandle h, char* buf, uint32_t size) { return vtable->getShaderDependencies(self, h, buf, size); }
 
 	void bindTexture   (TextureHandle h, uint32_t s)  { vtable->bindTexture(self, h, s);  }
 	void draw          (const GfxDrawCmd& cmd)        { vtable->draw(self, &cmd);         }

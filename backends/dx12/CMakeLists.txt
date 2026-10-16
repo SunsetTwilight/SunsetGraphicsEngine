@@ -30,6 +30,7 @@ add_library(gfx_dx12 SHARED
     DX12Resources.cpp     # テクスチャ / ビュー / サンプラー、RT / DS
     DX12SwapChain.cpp
     DX12ShaderCompiler.cpp
+    DX12ShaderReflection.cpp  # シェーダーのリフレクション (ABI の POD への変換)
 )
 
 target_link_libraries(gfx_dx12 PRIVATE

@@ -201,6 +201,7 @@ struct DX12ShadRes
 	std::vector<uint8_t>     bytecode;      // DXIL コンテナ (リフレクションは外してある)
 	ShaderStage              stage = ShaderStage::Vertex;
 	std::vector<std::string> dependencies;  // #include で読み込んだファイル
+	std::vector<uint8_t>     reflection;    // リフレクションのパート (空なら bytecode から作る)
 };
 
 // クエリプール (クエリヒープ + 読み出し用の READBACK バッファ)
