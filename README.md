@@ -1,4 +1,4 @@
-# GraphicsEngine
+# SunsetGraphicsEngine
 
 DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジン。
 
@@ -21,7 +21,7 @@ DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジ�
 ## ディレクトリ構成
 
 ```
-GraphicsEngine/
+SunsetGraphicsEngine/
 ├── CMakeLists.txt                  ← ルート (オプションと add_subdirectory のみ)
 ├── CMakePresets.json               ← Ninja / VS2022 / Linux プリセット
 ├── cmake/                          ← 共通の警告・定義、DXC の検出、外部ライブラリ (FetchContent)

@@ -63,4 +63,4 @@ gfx_copy_dxc_dll(GfxExample)
 
 install(TARGETS GfxExample RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
-message(STATUS "[GraphicsEngine] ターゲット: GfxExample")
+message(STATUS "[SunsetGraphicsEngine] ターゲット: GfxExample")

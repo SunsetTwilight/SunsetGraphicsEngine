@@ -67,4 +67,4 @@ target_compile_definitions(gfx_dx12 PRIVATE
 
 install(TARGETS gfx_dx12 RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
-message(STATUS "[GraphicsEngine] ターゲット: gfx_dx12.dll")
+message(STATUS "[SunsetGraphicsEngine] ターゲット: gfx_dx12.dll")

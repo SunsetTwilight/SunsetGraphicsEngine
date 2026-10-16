@@ -33,4 +33,4 @@ set_target_properties(GfxEditor PROPERTIES
 
 install(TARGETS GfxEditor RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
-message(STATUS "[GraphicsEngine] ターゲット: GfxEditor (スタブ)")
+message(STATUS "[SunsetGraphicsEngine] ターゲット: GfxEditor (スタブ)")

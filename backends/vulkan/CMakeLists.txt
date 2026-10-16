@@ -87,4 +87,4 @@ install(TARGETS gfx_vulkan
     LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}"   # Linux/macOS .so/.dylib
 )
 
-message(STATUS "[GraphicsEngine] ターゲット: gfx_vulkan (Vulkan ${Vulkan_VERSION})")
+message(STATUS "[SunsetGraphicsEngine] ターゲット: gfx_vulkan (Vulkan ${Vulkan_VERSION})")

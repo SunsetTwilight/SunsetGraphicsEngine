@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(GraphicsEngine VERSION 1.0.0 LANGUAGES CXX)
+project(SunsetGraphicsEngine VERSION 1.0.0 LANGUAGES CXX)
 
 # ============================================================
 #  ディレクトリ構成と依存の向き
@@ -77,7 +77,7 @@ endif()
 # ============================================================
 message(STATUS "")
 message(STATUS "=========================================")
-message(STATUS "  GraphicsEngine ${PROJECT_VERSION}")
+message(STATUS "  SunsetGraphicsEngine ${PROJECT_VERSION}")
 message(STATUS "  コンパイラ    : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 message(STATUS "  ビルドタイプ  : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  出力先        : ${CMAKE_BINARY_DIR}/bin")
