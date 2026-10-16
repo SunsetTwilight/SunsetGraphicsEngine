@@ -16,8 +16,8 @@
 //    毎フレーム Direct コマンドバッファから executeBundle() で呼ぶ。
 //    記録コストを削減できる。
 // ============================================================
-#include "GraphicsEngine.h"
-#include "GfxSchema.h"
+#include "gfx/core/GraphicsEngine.h"
+#include "gfx/schema/GfxSchema.h"
 #include <cstring>
 #include <iostream>
 #include <stdexcept>

@@ -3,8 +3,8 @@
 //  GraphicsEngine.h  (RT/DS 分離版)
 // ============================================================
 
-#include "GfxBackendABI.h"
-#include "PluginLoader.h"
+#include "gfx/abi/GfxBackendABI.h"
+#include "gfx/core/PluginLoader.h"
 #include <string>
 #include <vector>
 #include <functional>

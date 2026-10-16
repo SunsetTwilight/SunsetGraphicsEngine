@@ -1,7 +1,7 @@
 // ============================================================
 //  GraphicsEngine.cpp  (RT/DS 分離版)
 // ============================================================
-#include "GraphicsEngine.h"
+#include "gfx/core/GraphicsEngine.h"
 #include <iostream>
 #include <algorithm>
 #include <filesystem>

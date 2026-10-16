@@ -10,7 +10,7 @@
 // ============================================================
 #ifdef _WIN32
 
-#include "GfxBackendABI.h"
+#include "gfx/abi/GfxBackendABI.h"
 #include <cassert>
 #include <d3d12.h>
 #include <string>

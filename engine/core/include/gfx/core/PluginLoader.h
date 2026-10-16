@@ -4,7 +4,7 @@
 //  DLL の動的ロード / アンロードをプラットフォーム非依存に扱う
 // ============================================================
 
-#include "GfxBackendABI.h"
+#include "gfx/abi/GfxBackendABI.h"
 #include <string>
 #include <stdexcept>
 #include <iostream>

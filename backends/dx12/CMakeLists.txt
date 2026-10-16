@@ -1,0 +1,54 @@
+# ============================================================
+#  gfx_dx12.dll  (Windows 専用)
+#
+#  エクスポート:
+#    GFX_GetABIInfo()      → ABI バージョン / 構造体サイズ
+#    GFX_CreateBackend()   → IBackendPlugin*
+#    GFX_DestroyBackend()  → void
+#
+#  依存 (Windows SDK に同梱):
+#    d3d12.lib / dxgi.lib / dxguid.lib / d3dcompiler.lib
+# ============================================================
+add_library(gfx_dx12 SHARED
+    DX12Backend.cpp
+)
+
+target_link_libraries(gfx_dx12 PRIVATE
+    gfx_abi
+    gfx_options
+    d3d12
+    dxgi
+    dxguid
+    d3dcompiler
+)
+
+# ---- DXC (オプション) ----
+# 見つかれば HLSL → DXIL (DXR の lib_6_x など) のコンパイルを有効にする
+if(GFX_DXC_FOUND)
+    if(GFX_DXC_INCLUDE_DIR)
+        target_include_directories(gfx_dx12 PRIVATE "${GFX_DXC_INCLUDE_DIR}")
+    endif()
+    target_link_libraries(gfx_dx12 PRIVATE "${GFX_DXC_LIBRARY}")
+    target_compile_definitions(gfx_dx12 PRIVATE GFX_HAS_DXC=1)
+endif()
+
+# ---- シンボル可視性 ----
+# WINDOWS_EXPORT_ALL_SYMBOLS=OFF にすることで
+# __declspec(dllexport) を付けた関数だけをエクスポートする
+set_target_properties(gfx_dx12 PROPERTIES
+    WINDOWS_EXPORT_ALL_SYMBOLS OFF
+    OUTPUT_NAME "gfx_dx12"
+    PREFIX      ""          # lib プレフィックスを付けない
+)
+
+target_compile_definitions(gfx_dx12 PRIVATE
+    GFX_BUILDING_DLL
+    UNICODE
+    _UNICODE
+    WIN32_LEAN_AND_MEAN
+    NOMINMAX               # <windows.h> の min/max マクロを抑制
+)
+
+install(TARGETS gfx_dx12 RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+
+message(STATUS "[GraphicsEngine] ターゲット: gfx_dx12.dll")
