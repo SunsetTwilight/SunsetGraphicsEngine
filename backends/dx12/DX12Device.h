@@ -319,6 +319,16 @@ private:
 	// DXR サポートレベル
 	D3D12_RAYTRACING_TIER m_raytracingTier = D3D12_RAYTRACING_TIER_NOT_SUPPORTED;
 
+	// デバッグメッセージの通知先 (GfxDeviceConfig::debugCallback。nullptr なら stderr)
+	PFN_GfxDebugMessage m_debugCallback = nullptr;
+	void*               m_debugUser     = nullptr;
+
+public:
+	// デバッグメッセージを通知する (コールバックがなければ stderr に出力する)
+	void emitDebugMessage(GfxMessageSeverity severity, int32_t id, const char* text);
+
+private:
+
 	// 遅延解放キュー
 	struct DeferredRelease
 	{
@@ -372,7 +382,7 @@ public:
 
 private:
 	// デフォルト RootSignature / PSO
-	bool createCoreDevice(bool validation);
+	bool createCoreDevice(const GfxDeviceConfig& cfg);
 	bool createDescriptorHeaps();
 	bool createDefaultPSO();
 	bool createSubmitFence();

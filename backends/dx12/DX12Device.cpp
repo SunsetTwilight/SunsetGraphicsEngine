@@ -13,6 +13,10 @@
 // デバイスを初期化する
 bool DX12DeviceImpl::init(const GfxDeviceConfig* cfg)
 {
+	m_debugCallback = cfg->debugCallback;
+	m_debugUser     = cfg->debugUser;
+
+	bool debugLayer = false;
 #ifdef _DEBUG
 	if (cfg->validation)
 	{
@@ -21,45 +25,94 @@ bool DX12DeviceImpl::init(const GfxDeviceConfig* cfg)
 		{
 			dbg->EnableDebugLayer();
 			dbg->SetEnableGPUBasedValidation(TRUE);
+			debugLayer = true;
+		}
+		else
+		{
+			// Graphics Tools (d3d12SDKLayers.dll) が入っていない環境
+			emitDebugMessage(GfxMessageSeverity::Info, -1,
+				"D3D12 debug layer is not available (install the Graphics Tools optional feature)");
 		}
 	}
+#else
+	if (cfg->validation)
+		emitDebugMessage(GfxMessageSeverity::Info, -1,
+			"validation is ignored because the backend is a release build");
 #endif
-	return createCoreDevice(cfg->validation)
+
+	GfxDeviceConfig c = *cfg;
+	c.validation = debugLayer;   // デバッグレイヤーを有効にできた場合だけ、デバッグ用のファクトリと InfoQueue を使う
+	return createCoreDevice(c)
 		&& createDescriptorHeaps()
 		&& createDefaultPSO()
 		&& createSubmitFence()
 		&& createCommandSignatures();
 }
 
-// デバイス / コマンドキューを作成する
-bool DX12DeviceImpl::createCoreDevice(bool validation)
+static_assert(static_cast<uint32_t>(GfxMessageSeverity::Corruption) == D3D12_MESSAGE_SEVERITY_CORRUPTION, "severity");
+static_assert(static_cast<uint32_t>(GfxMessageSeverity::Error)      == D3D12_MESSAGE_SEVERITY_ERROR,      "severity");
+static_assert(static_cast<uint32_t>(GfxMessageSeverity::Warning)    == D3D12_MESSAGE_SEVERITY_WARNING,    "severity");
+
+void DX12DeviceImpl::emitDebugMessage(GfxMessageSeverity severity, int32_t id, const char* text)
 {
+	if (m_debugCallback)
+	{
+		m_debugCallback(m_debugUser, severity, id, text);
+		return;
+	}
+	static const char* k_sev[] = { "CORRUPTION", "ERROR", "WARNING", "INFO" };
+	const uint32_t s = static_cast<uint32_t>(severity);
+	fprintf(stderr, "[D3D12 %s #%d] %s\n", s < 4 ? k_sev[s] : "?", static_cast<int>(id), text);
+}
+
+// デバイス / コマンドキューを作成する
+bool DX12DeviceImpl::createCoreDevice(const GfxDeviceConfig& cfg)
+{
+	const bool validation = cfg.validation;
 	UINT flags = validation ? DXGI_CREATE_FACTORY_DEBUG : 0;
 
 	if (FAILED(CreateDXGIFactory2(flags, IID_PPV_ARGS(&m_factory))))
 		return false;
 
-	ComPtr<IDXGIAdapter1> a1;
-	for (UINT i = 0; m_factory->EnumAdapters1(i, &a1) != DXGI_ERROR_NOT_FOUND; ++i)
+	auto tryAdapter = [this](IDXGIAdapter1* adapter) -> bool
 	{
 		DXGI_ADAPTER_DESC1 d;
-		a1->GetDesc1(&d);
+		adapter->GetDesc1(&d);
+		if (FAILED(D3D12CreateDevice(adapter, D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&m_device))))
+			return false;
+		ComPtr<IDXGIAdapter1> a(adapter);
+		a.As(&m_adapter);
+		WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, m_adapterName, 256, nullptr, nullptr);
+		return true;
+	};
 
-		if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
-			continue;
-
-		if (SUCCEEDED(D3D12CreateDevice(a1.Get(), D3D_FEATURE_LEVEL_12_1, IID_PPV_ARGS(&m_device))))
+	if (cfg.adapterType == GfxAdapterType::Software)
+	{
+		// WARP (ソフトウェアレンダラー)。GPU のない CI などで使う
+		ComPtr<IDXGIAdapter1> warp;
+		if (SUCCEEDED(m_factory->EnumWarpAdapter(IID_PPV_ARGS(&warp))))
+			tryAdapter(warp.Get());
+	}
+	else
+	{
+		ComPtr<IDXGIAdapter1> a1;
+		for (UINT i = 0; m_factory->EnumAdapters1(i, &a1) != DXGI_ERROR_NOT_FOUND; ++i)
 		{
-			a1.As(&m_adapter);
-			WideCharToMultiByte(CP_UTF8, 0, d.Description, -1, m_adapterName, 256, nullptr, nullptr);
-			break;
+			DXGI_ADAPTER_DESC1 d;
+			a1->GetDesc1(&d);
+
+			if (d.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+				continue;
+
+			if (tryAdapter(a1.Get()))
+				break;
 		}
 	}
 
 	if (!m_device)
 		return false;
 
-	// バリデーション有効時はデバッグレイヤーのメッセージを stderr にも出力する
+	// バリデーション有効時は、デバッグレイヤーのメッセージをコールバック (なければ stderr) に通知する
 	// (デバッガ未接続でも検証結果を確認できるようにする)
 	if (validation)
 	{
@@ -69,14 +122,15 @@ bool DX12DeviceImpl::createCoreDevice(bool validation)
 			DWORD cookie = 0;
 			iq->RegisterMessageCallback(
 				[](D3D12_MESSAGE_CATEGORY, D3D12_MESSAGE_SEVERITY sev,
-				   D3D12_MESSAGE_ID id, LPCSTR desc, void*)
+				   D3D12_MESSAGE_ID id, LPCSTR desc, void* ctx)
 				{
 					if (sev > D3D12_MESSAGE_SEVERITY_WARNING)
 						return;
-					static const char* k_sev[] = { "CORRUPTION", "ERROR", "WARNING" };
-					fprintf(stderr, "[D3D12 %s #%d] %s\n", k_sev[sev], static_cast<int>(id), desc);
+					// D3D12_MESSAGE_SEVERITY の CORRUPTION / ERROR / WARNING は GfxMessageSeverity と同じ値
+					static_cast<DX12DeviceImpl*>(ctx)->emitDebugMessage(
+						static_cast<GfxMessageSeverity>(sev), static_cast<int32_t>(id), desc);
 				},
-				D3D12_MESSAGE_CALLBACK_FLAG_NONE, nullptr, &cookie);
+				D3D12_MESSAGE_CALLBACK_FLAG_NONE, this, &cookie);
 		}
 	}
 

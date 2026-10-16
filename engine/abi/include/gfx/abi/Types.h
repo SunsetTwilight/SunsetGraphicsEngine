@@ -186,10 +186,33 @@ struct GfxSwapChainDesc {
 };
 
 // デバイス初期化パラメータ
+// 使うアダプター
+enum class GfxAdapterType : uint32_t {
+	Hardware = 0,   // GPU (ソフトウェアアダプターは除く)
+	Software = 1,   // ソフトウェアレンダラー (DX12 では WARP)。GPU のない CI などで使う
+};
+
+// デバッグメッセージ (D3D12 デバッグレイヤーなど) の重要度
+enum class GfxMessageSeverity : uint32_t {
+	Corruption = 0,
+	Error      = 1,
+	Warning    = 2,
+	Info       = 3,   // 情報 (例: デバッグレイヤーを有効にできなかった)
+};
+
+// デバッグメッセージを受け取るコールバック。
+// メッセージを発生させた API を呼んだスレッドから呼ばれる。text は呼び出し中のみ有効 (UTF-8)
+using PFN_GfxDebugMessage = void (*)(void* user, GfxMessageSeverity severity, int32_t id, const char* text);
+
 struct GfxDeviceConfig {
 	GraphicsAPI api        = GraphicsAPI::Auto;
-	bool        validation = false;
+	bool        validation = false;   // デバッグレイヤー (Debug ビルドのバックエンドのみ有効)
 	char        appName[128] = "GraphicsApp";
+
+	GfxAdapterType      adapterType   = GfxAdapterType::Hardware;
+	// validation 有効時のメッセージの通知先。nullptr なら stderr に出力する
+	PFN_GfxDebugMessage debugCallback = nullptr;
+	void*               debugUser     = nullptr;
 };
 
 // バッファ / テクスチャ / シェーダー記述子

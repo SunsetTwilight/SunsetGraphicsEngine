@@ -128,6 +128,7 @@ cmake --build build/release
 | `GFX_BUILD_DX12` | `WIN32` | DirectX 12 バックエンド DLL をビルドする |
 | `GFX_BUILD_VULKAN` | `OFF` | Vulkan バックエンド DLL をビルドする (現在はビルド不可。上記「対応状況」を参照) |
 | `GFX_BUILD_EXAMPLE` | 単独ビルド時 `ON` / 取り込まれたとき `OFF` | サンプルアプリ `GfxExample` をビルドする |
+| `GFX_BUILD_TESTS` | 単独ビルド時 `ON` / 取り込まれたとき `OFF` | 自動テスト (doctest) をビルドする。configure 時に doctest を取得する |
 | `GFX_INSTALL` | `ON` | install / export (find_package 用) の規則を生成する |
 | `GFX_ENABLE_VALIDATION` | `OFF` | GPU バリデーション / デバッグレイヤーを有効にする |
 | `GFX_DXC_DIR` | *(空)* | DXC のルートディレクトリ (HLSL → DXIL コンパイルを有効化) |
@@ -215,6 +216,18 @@ ABI v2 の記述子 (`GfxGraphicsPipelineDesc` / `GfxBindingLayoutDesc`) は先�
 `GFX_EXAMPLE_DUMP_SCHEMA=1` でサンプルを実行すると、スキーマ経由で記述子の中身を出力します。
 
 サンプルは 60 フレームごとに `[GPU   N]` の行で、パスごとの GPU 時間 (タイムスタンプのクエリ) と G-Buffer のオクルージョンクエリの結果を出力します。
+
+---
+
+## 自動テスト
+
+doctest と CTest による自動テストがあります。内容は [tests/README.md](tests/README.md) を参照してください。
+
+```bat
+ctest --test-dir build/windows-debug --output-on-failure
+```
+
+GitHub Actions (`.github/workflows/ci.yml`) で、push と pull request のたびに Debug / Release のビルドとテストを実行します。ランナーには GPU がないため、描画テストは WARP (ソフトウェアレンダラー) で実行します。
 
 ---
 

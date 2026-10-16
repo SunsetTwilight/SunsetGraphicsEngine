@@ -24,12 +24,18 @@
 //  アプリ向け高レベル記述子
 // ============================================================
 struct DeviceConfig {
-	GraphicsAPI api        = GraphicsAPI::Auto;
-	bool        validation = false;
-	std::string appName    = "GraphicsApp";
+	GraphicsAPI    api        = GraphicsAPI::Auto;
+	bool           validation = false;   // デバッグレイヤー (Debug ビルドのバックエンドのみ有効)
+	std::string    appName    = "GraphicsApp";
+	GfxAdapterType adapter    = GfxAdapterType::Hardware;   // Software = WARP (GPU のない CI など)
 
+	// validation 有効時のデバッグメッセージの受け取り先。空なら stderr に出力される。
+	// メッセージを発生させた API を呼んだスレッドから呼ばれる。
+	std::function<void(GfxMessageSeverity, int32_t id, const char* text)> debugMessage;
+
+	// コールバック以外を POD に変換する (コールバックは GraphicsEngine::init が設定する)
 	GfxDeviceConfig toPOD() const {
-		GfxDeviceConfig c; c.api = api; c.validation = validation;
+		GfxDeviceConfig c; c.api = api; c.validation = validation; c.adapterType = adapter;
 		auto n = appName.substr(0, 127); n.copy(c.appName, n.size()); c.appName[n.size()] = '\0';
 		return c;
 	}
@@ -156,7 +162,13 @@ public:
 					  << dllInfo.abiVersion << ", header abi=" << GFX_ABI_VERSION << ")\n";
 			return false;
 		}
-		const GfxDeviceConfig pod = cfg.toPOD();
+		GfxDeviceConfig pod = cfg.toPOD();
+		m_debugMessage = cfg.debugMessage;
+		if (m_debugMessage)
+		{
+			pod.debugCallback = &GraphicsEngine::debugMessageThunk;
+			pod.debugUser     = this;
+		}
 		return gfxEngineInit(m_engine, &pod);
 	}
 
@@ -347,7 +359,14 @@ private:
 		if (self->m_postSwap) self->m_postSwap(oldApi, newApi);
 	}
 
+	static void debugMessageThunk(void* user, GfxMessageSeverity severity, int32_t id, const char* text)
+	{
+		auto* self = static_cast<GraphicsEngine*>(user);
+		if (self->m_debugMessage) self->m_debugMessage(severity, id, text);
+	}
+
 	GfxEngine*                 m_engine = nullptr;
 	std::vector<RenderWindow*> m_windows;
 	SwapCallback               m_preSwap, m_postSwap;
+	std::function<void(GfxMessageSeverity, int32_t, const char*)> m_debugMessage;
 };

@@ -56,6 +56,7 @@ endif()
 option(GFX_BUILD_DX12        "DirectX 12 バックエンド DLL をビルドする (Windows 専用)" ${WIN32})
 option(GFX_BUILD_VULKAN      "Vulkan バックエンド DLL をビルドする (現在は ABI と不一致でビルド不可)" OFF)
 option(GFX_BUILD_EXAMPLE     "サンプルアプリをビルドする"                               ${PROJECT_IS_TOP_LEVEL})
+option(GFX_BUILD_TESTS       "自動テスト (doctest) をビルドする。configure 時に doctest を取得する" ${PROJECT_IS_TOP_LEVEL})
 option(GFX_ENABLE_VALIDATION "GPU 検証レイヤー / デバッグレイヤーを有効にする"          OFF)
 option(GFX_INSTALL           "install / export の規則を生成する"                         ON)
 
@@ -81,6 +82,11 @@ add_subdirectory(backends)
 
 if(GFX_BUILD_EXAMPLE)
     add_subdirectory(samples)
+endif()
+
+if(GFX_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
 endif()
 
 # ============================================================
@@ -131,6 +137,7 @@ message(STATUS "  gfx_dx12      : ${GFX_BUILD_DX12}")
 message(STATUS "  gfx_vulkan    : ${GFX_BUILD_VULKAN}")
 message(STATUS "  バリデーション: ${GFX_ENABLE_VALIDATION}")
 message(STATUS "  サンプル      : ${GFX_BUILD_EXAMPLE}")
+message(STATUS "  テスト        : ${GFX_BUILD_TESTS}")
 if(GFX_DXC_FOUND)
     message(STATUS "  DXC           : ${GFX_DXC_LIBRARY}")
 endif()

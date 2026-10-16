@@ -1,0 +1,58 @@
+# ============================================================
+#  CI: ビルドと自動テスト (Windows / DX12)
+#
+#  GitHub のランナーには GPU がないため、描画テストは WARP (ソフトウェアレンダラー) で実行する
+#  (GFX_TEST_ADAPTER=software)。DXR は WARP で使えないため、テストでは使っていない。
+#  Debug では D3D12 デバッグレイヤー (Graphics Tools) を入れ、デバッグレイヤーのメッセージが
+#  0 件であることまで確認する。入れられなかった場合は、描画とタイムスタンプの確認だけを行う。
+# ============================================================
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    name: Windows (${{ matrix.config }})
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        config: [ Debug, Release ]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install D3D12 debug layer (Graphics Tools)
+        if: matrix.config == 'Debug'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          Add-WindowsCapability -Online -Name "Tools.Graphics.DirectX~~~~0.0.1.0"
+          Test-Path "$env:WINDIR\System32\d3d12SDKLayers.dll"
+
+      - name: Configure
+        shell: pwsh
+        run: >
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+          -DGFX_BUILD_DX12=ON -DGFX_BUILD_VULKAN=OFF
+          -DGFX_ENABLE_VALIDATION=${{ matrix.config == 'Debug' && 'ON' || 'OFF' }}
+          -DGFX_BUILD_TESTS=ON -DGFX_BUILD_EXAMPLE=ON
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.config }} --parallel
+
+      - name: Test (WARP)
+        env:
+          GFX_TEST_ADAPTER: software
+        run: ctest --test-dir build -C ${{ matrix.config }} --output-on-failure
+
+      - name: Install (package check)
+        run: cmake --install build --config ${{ matrix.config }} --prefix install

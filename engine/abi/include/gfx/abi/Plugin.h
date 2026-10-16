@@ -25,7 +25,8 @@
 //  3: ABI v2 のパイプラインステート / バインディングレイアウト (createBindingLayout / createGraphicsPipeline)
 //  4: Phase 2b-1 (低レベルなバインド、明示的なコマンド、Compute パイプライン、クエリ)
 //  5: Phase 2b-2 (テクスチャ / ビュー / サンプラーの v2 記述子、MSAA、resolve。GfxPipelineDesc に sampleCount)
-#define GFX_ABI_VERSION 5u
+//  6: GfxDeviceConfig にアダプターの種類 (WARP) とデバッグメッセージのコールバックを追加
+#define GFX_ABI_VERSION 6u
 
 struct GfxABIInfo
 {
@@ -37,6 +38,7 @@ struct GfxABIInfo
 	uint32_t sizeofDepthStencilVTable;
 	uint32_t sizeofPipelineDesc;
 	uint32_t sizeofDrawCmd;
+	uint32_t sizeofDeviceConfig;
 };
 
 // この翻訳単位 (EXE / DLL それぞれ) でコンパイルされた ABI 情報を返す
@@ -51,6 +53,7 @@ inline GfxABIInfo gfxCurrentABIInfo()
 		static_cast<uint32_t>(sizeof(IDepthStencilVTable)),
 		static_cast<uint32_t>(sizeof(GfxPipelineDesc)),
 		static_cast<uint32_t>(sizeof(GfxDrawCmd)),
+		static_cast<uint32_t>(sizeof(GfxDeviceConfig)),
 	};
 }
 
@@ -63,7 +66,8 @@ inline bool operator==(const GfxABIInfo& a, const GfxABIInfo& b)
 		&& a.sizeofRenderTargetVTable  == b.sizeofRenderTargetVTable
 		&& a.sizeofDepthStencilVTable  == b.sizeofDepthStencilVTable
 		&& a.sizeofPipelineDesc        == b.sizeofPipelineDesc
-		&& a.sizeofDrawCmd             == b.sizeofDrawCmd;
+		&& a.sizeofDrawCmd             == b.sizeofDrawCmd
+		&& a.sizeofDeviceConfig        == b.sizeofDeviceConfig;
 }
 
 using PFN_GFX_CreateBackend  = IBackendPlugin* (*)();
