@@ -9,11 +9,9 @@
 #include <d3d12.h>
 #include <string>
 
-// DXC (DirectX Shader Compiler) - GFX_DXC_DIR が設定されている場合のみ有効
-#ifdef GFX_HAS_DXC
+// DXC (DirectX Shader Compiler)。ヘッダーは cmake/GfxDxc.cmake が取得した DXC のもの
 #include <dxcapi.h>
-#endif
-#include <d3dcompiler.h>
+#include <d3d12shader.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 #include <functional>

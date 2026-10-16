@@ -60,18 +60,18 @@ option(GFX_BUILD_TESTS       "自動テスト (doctest) をビルドする。con
 option(GFX_ENABLE_VALIDATION "GPU 検証レイヤー / デバッグレイヤーを有効にする"          OFF)
 option(GFX_INSTALL           "install / export の規則を生成する"                         ON)
 
-# DXC のルートディレクトリ (省略時は自動検出。見つからなければ DXR のシェーダーコンパイルがスタブになる)
+# DXC のルートディレクトリ (省略時は公式リリースを FetchContent で取得する。cmake/GfxDxc.cmake)
 set(GFX_DXC_DIR "" CACHE PATH
-    "DirectX Shader Compiler のルートディレクトリ (inc/ と lib/x64/ を含む)")
+    "DirectX Shader Compiler のルートディレクトリ (inc/ と bin/x64/ を含む)。空なら自動で取得する")
 
 include(GNUInstallDirs)
 include(GfxOptions)                        # gfx_options (警告・定義の共通設定)
-include(GfxDxc)                            # DXC の検出 (GFX_DXC_FOUND / GFX_DXC_INCLUDE_DIR / GFX_DXC_LIBRARY / GFX_DXC_DLL)
+include(GfxDxc)                            # DXC の取得 (GFX_DXC_FOUND / GFX_DXC_INCLUDE_DIR / GFX_DXC_RUNTIME_FILES)
 include(SunsetGraphicsEngineRuntime)       # sunset_gfx_deploy_runtime()
 
-# 実行時に必要な追加ファイル (dxcompiler.dll) を配置関数に登録する
-if(GFX_DXC_DLL)
-    set_property(GLOBAL APPEND PROPERTY SUNSET_GFX_RUNTIME_EXTRA_FILES "${GFX_DXC_DLL}")
+# 実行時に必要な追加ファイル (dxcompiler.dll / dxil.dll) を配置関数に登録する
+if(GFX_DXC_RUNTIME_FILES)
+    set_property(GLOBAL APPEND PROPERTY SUNSET_GFX_RUNTIME_EXTRA_FILES ${GFX_DXC_RUNTIME_FILES})
 endif()
 
 # ============================================================
@@ -119,9 +119,9 @@ if(GFX_INSTALL)
             cmake/SunsetGraphicsEngineRuntime.cmake
         DESTINATION "${_gfx_cmake_dir}"
     )
-    # dxcompiler.dll もアプリと一緒に配置できるよう同梱する
-    if(GFX_DXC_DLL)
-        install(FILES "${GFX_DXC_DLL}" DESTINATION "${CMAKE_INSTALL_BINDIR}")
+    # dxcompiler.dll / dxil.dll もアプリと一緒に配置できるよう同梱する
+    if(GFX_DXC_RUNTIME_FILES)
+        install(FILES ${GFX_DXC_RUNTIME_FILES} DESTINATION "${CMAKE_INSTALL_BINDIR}")
     endif()
 endif()
 
@@ -140,7 +140,7 @@ message(STATUS "  バリデーション: ${GFX_ENABLE_VALIDATION}")
 message(STATUS "  サンプル      : ${GFX_BUILD_EXAMPLE}")
 message(STATUS "  テスト        : ${GFX_BUILD_TESTS}")
 if(GFX_DXC_FOUND)
-    message(STATUS "  DXC           : ${GFX_DXC_LIBRARY}")
+    message(STATUS "  DXC           : ${GFX_DXC_INCLUDE_DIR}")
 endif()
 message(STATUS "=========================================")
 message(STATUS "")

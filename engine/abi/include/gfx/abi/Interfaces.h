@@ -34,12 +34,48 @@ struct IPipeline
 	void destroy() { vtable->destroy(self); }
 };
 
+// ============================================================
+//  シェーダー
+//  HLSL ソースは DXC で DXIL にコンパイルする (既定のプロファイルは <stage>_6_0)。
+//  コンパイルのエラーと警告はデバッグメッセージ (GfxDeviceConfig::debugCallback) で通知する。
+// ============================================================
+
+// マクロ定義 (#define name value)。value が nullptr なら "1"
+struct GfxShaderDefine {
+	const char* name  = nullptr;
+	const char* value = nullptr;
+};
+
+enum class GfxShaderCompileFlags : uint32_t {
+	None             = 0,
+	Debug            = 0x1,   // デバッグ情報を埋め込む (-Zi -Qembed_debug)。PIX / RenderDoc でソースを表示できる
+	SkipOptimization = 0x2,   // 最適化しない (-Od)
+	WarningsAsErrors = 0x4,   // 警告をエラーにする (-WX)
+};
+constexpr GfxShaderCompileFlags operator|(GfxShaderCompileFlags a, GfxShaderCompileFlags b)
+{
+	return static_cast<GfxShaderCompileFlags>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));
+}
+constexpr bool gfxHasFlag(GfxShaderCompileFlags v, GfxShaderCompileFlags f)
+{
+	return (static_cast<uint32_t>(v) & static_cast<uint32_t>(f)) != 0;
+}
+
 struct GfxShaderDesc {
 	ShaderStage      stage;
 	const char*      source         = nullptr;  // HLSL ソース (優先)
 	const char*      entryPoint     = "main";
-	const void*      bytecode       = nullptr;  // コンパイル済み DXBC/DXIL
+	const void*      bytecode       = nullptr;  // コンパイル済みの DXIL (source が nullptr のとき)
 	size_t           bytecodeSize   = 0;
+
+	// ---- ABI 7 ----
+	const char*            sourceName      = nullptr;  // ファイルのパス (エラーメッセージと、相対 #include の基準)
+	const char*            targetProfile   = nullptr;  // "ps_6_6" など。nullptr なら <stage>_6_0
+	const GfxShaderDefine* defines         = nullptr;
+	uint32_t               defineCount     = 0;
+	const char* const*     includeDirs     = nullptr;  // #include の検索パス (-I)
+	uint32_t               includeDirCount = 0;
+	GfxShaderCompileFlags  flags           = GfxShaderCompileFlags::None;
 };
 struct GfxDrawCmd {
 	BufferHandle vertexBuffer;

@@ -11,8 +11,7 @@
       "binaryDir": "${sourceDir}/build/${presetName}",
       "installDir": "${sourceDir}/install/${presetName}",
       "cacheVariables": {
-        "GFX_BUILD_EXAMPLE": "ON",
-        "GFX_DXC_DIR": "C:/dxc_2025_05_24"
+        "GFX_BUILD_EXAMPLE": "ON"
       }
     },
 
@@ -66,8 +65,7 @@
         "GFX_BUILD_DX12":        "ON",
         "GFX_BUILD_VULKAN":      "OFF",
         "GFX_ENABLE_VALIDATION": "OFF",
-        "GFX_BUILD_EXAMPLE":     "ON",
-        "GFX_DXC_DIR":           "C:/dxc_2025_05_24"
+        "GFX_BUILD_EXAMPLE":     "ON"
       }
     },
 

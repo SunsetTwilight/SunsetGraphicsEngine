@@ -26,7 +26,9 @@
 //  4: Phase 2b-1 (低レベルなバインド、明示的なコマンド、Compute パイプライン、クエリ)
 //  5: Phase 2b-2 (テクスチャ / ビュー / サンプラーの v2 記述子、MSAA、resolve。GfxPipelineDesc に sampleCount)
 //  6: GfxDeviceConfig にアダプターの種類 (WARP) とデバッグメッセージのコールバックを追加
-#define GFX_ABI_VERSION 6u
+//  7: シェーダーを DXC (DXIL) に統一。GfxShaderDesc の拡張、ShaderStage の追加、
+//     シェーダーのリフレクション、シェーダー / パイプラインの作り直し (ホットリロード)
+#define GFX_ABI_VERSION 7u
 
 struct GfxABIInfo
 {

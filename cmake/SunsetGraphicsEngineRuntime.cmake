@@ -4,7 +4,7 @@
 #  アプリの実行ファイルの横に、エンジンの実行時に必要なファイルをコピーする。
 #    ・SunsetGraphicsEngine.dll (本体)
 #    ・gfx_dx12.dll / gfx_vulkan (ビルド / インストールされているバックエンド)
-#    ・dxcompiler.dll など SUNSET_GFX_RUNTIME_EXTRA_FILES に登録されたファイル
+#    ・dxcompiler.dll / dxil.dll など SUNSET_GFX_RUNTIME_EXTRA_FILES に登録されたファイル
 #
 #  find_package(SunsetGraphicsEngine) でも FetchContent / add_subdirectory でも同じように使える。
 #  どちらの場合もターゲット名は SunsetGraphicsEngine::core / ::dx12 / ::vulkan。

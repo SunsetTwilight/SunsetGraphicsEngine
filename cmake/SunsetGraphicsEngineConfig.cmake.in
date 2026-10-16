@@ -14,11 +14,14 @@
 include("${CMAKE_CURRENT_LIST_DIR}/SunsetGraphicsEngineTargets.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/SunsetGraphicsEngineRuntime.cmake")
 
-# インストールに同梱された dxcompiler.dll も配置対象にする
-set(_sunset_gfx_dxc "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/dxcompiler.dll")
-if(EXISTS "${_sunset_gfx_dxc}")
-    set_property(GLOBAL APPEND PROPERTY SUNSET_GFX_RUNTIME_EXTRA_FILES "${_sunset_gfx_dxc}")
-endif()
-unset(_sunset_gfx_dxc)
+# インストールに同梱された dxcompiler.dll / dxil.dll も配置対象にする
+foreach(_sunset_gfx_dll dxcompiler.dll dxil.dll)
+    set(_sunset_gfx_path "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@/${_sunset_gfx_dll}")
+    if(EXISTS "${_sunset_gfx_path}")
+        set_property(GLOBAL APPEND PROPERTY SUNSET_GFX_RUNTIME_EXTRA_FILES "${_sunset_gfx_path}")
+    endif()
+endforeach()
+unset(_sunset_gfx_dll)
+unset(_sunset_gfx_path)
 
 check_required_components(SunsetGraphicsEngine)

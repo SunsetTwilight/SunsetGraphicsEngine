@@ -10,7 +10,8 @@
 //  共通型
 // ============================================================
 enum class GraphicsAPI : uint32_t { DirectX12 = 0, Vulkan = 1, Auto = 0xFFFF };
-enum class ShaderStage : uint32_t { Vertex = 0, Fragment = 1, Compute = 2 };
+// Fragment = ピクセルシェーダー。Geometry / Hull / Domain は ABI 7 で追加 (値は末尾に追加する)
+enum class ShaderStage : uint32_t { Vertex = 0, Fragment = 1, Compute = 2, Geometry = 3, Hull = 4, Domain = 5 };
 
 enum class PixelFormat : uint32_t {
 	Unknown = 0,
@@ -200,6 +201,11 @@ enum class GfxMessageSeverity : uint32_t {
 	Info       = 3,   // 情報 (例: デバッグレイヤーを有効にできなかった)
 };
 
+// デバッグメッセージの id。0 以上は D3D12_MESSAGE_ID (デバッグレイヤー)、負の値はエンジン自身のメッセージ
+constexpr int32_t GFX_MESSAGE_ID_ENGINE         = -1;   // 一般的な情報
+constexpr int32_t GFX_MESSAGE_ID_SHADER_COMPILE = -2;   // シェーダーのコンパイルエラー / 警告 (validation に関係なく通知する)
+constexpr int32_t GFX_MESSAGE_ID_PIPELINE       = -3;   // パイプラインの作成 / 作り直しの失敗
+
 // デバッグメッセージを受け取るコールバック。
 // メッセージを発生させた API を呼んだスレッドから呼ばれる。text は呼び出し中のみ有効 (UTF-8)
 using PFN_GfxDebugMessage = void (*)(void* user, GfxMessageSeverity severity, int32_t id, const char* text);
@@ -210,7 +216,7 @@ struct GfxDeviceConfig {
 	char        appName[128] = "GraphicsApp";
 
 	GfxAdapterType      adapterType   = GfxAdapterType::Hardware;
-	// validation 有効時のメッセージの通知先。nullptr なら stderr に出力する
+	// メッセージの通知先 (デバッグレイヤーのメッセージは validation 有効時のみ)。nullptr なら stderr に出力する
 	PFN_GfxDebugMessage debugCallback = nullptr;
 	void*               debugUser     = nullptr;
 };

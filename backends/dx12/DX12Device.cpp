@@ -30,13 +30,13 @@ bool DX12DeviceImpl::init(const GfxDeviceConfig* cfg)
 		else
 		{
 			// Graphics Tools (d3d12SDKLayers.dll) が入っていない環境
-			emitDebugMessage(GfxMessageSeverity::Info, -1,
+			emitDebugMessage(GfxMessageSeverity::Info, GFX_MESSAGE_ID_ENGINE,
 				"D3D12 debug layer is not available (install the Graphics Tools optional feature)");
 		}
 	}
 #else
 	if (cfg->validation)
-		emitDebugMessage(GfxMessageSeverity::Info, -1,
+		emitDebugMessage(GfxMessageSeverity::Info, GFX_MESSAGE_ID_ENGINE,
 			"validation is ignored because the backend is a release build");
 #endif
 
@@ -895,49 +895,25 @@ void DX12DeviceImpl::destroySampler(SamplerHandle h)
 		deferRelease(nullptr, [this, slot] { m_samplerHeapCPU.free(slot); });
 	m_samplers.erase(it);
 }
-// シェーダーをコンパイルする (DXC 実装は別途)
-// HLSL ソースまたはバイトコードからシェーダーをコンパイル・登録する
+// シェーダーをコンパイル (または DXIL を登録) してハンドルを返す。失敗したら無効なハンドル
 ShaderHandle DX12DeviceImpl::compileShader(const GfxShaderDesc* desc)
 {
-	DX12ShadRes sh;
-	sh.stage  = desc->stage;
+	if (!desc)
+		return {};
 
-	static const char* k_profiles[] = { "vs_5_1", "ps_5_1", "cs_5_1" };
-	const char* profile = k_profiles[static_cast<uint32_t>(desc->stage)];
+	DX12ShadRes sh;
+	sh.stage = desc->stage;
 
 	if (desc->source)
 	{
-		// HLSL ソースを D3DCompile でコンパイルする
-		ComPtr<ID3DBlob> code;
-		ComPtr<ID3DBlob> err;
-		HRESULT hr = D3DCompile(
-			desc->source,
-			strlen(desc->source),
-			nullptr,
-			nullptr,
-			nullptr,
-			desc->entryPoint ? desc->entryPoint : "main",
-			profile,
-			D3DCOMPILE_OPTIMIZATION_LEVEL1,
-			0,
-			&code,
-			&err);
-
-		if (FAILED(hr))
-		{
-			if (err)
-			{
-				OutputDebugStringA("[GfxEngine] compileShader failed:\n");
-				OutputDebugStringA(static_cast<const char*>(err->GetBufferPointer()));
-				// stdout にも出力してコンソールで確認できるようにする
-				fprintf(stderr, "[GfxEngine] compileShader failed:\n%s\n",
-					static_cast<const char*>(err->GetBufferPointer()));
-			}
-			return {};  // invalid handle
-		}
-
-		const uint8_t* p = static_cast<const uint8_t*>(code->GetBufferPointer());
-		sh.bytecode.assign(p, p + code->GetBufferSize());
+		const char* profile = desc->targetProfile ? desc->targetProfile : dx12DefaultShaderProfile(desc->stage);
+		DX12ShaderOutput out;
+		const bool ok = m_shaderCompiler.compile(*desc, profile, out);
+		reportShaderMessages("compileShader", desc->sourceName, out.messages, !ok);
+		if (!ok)
+			return {};
+		sh.bytecode     = std::move(out.bytecode);
+		sh.dependencies = std::move(out.dependencies);
 	}
 	else if (desc->bytecode && desc->bytecodeSize > 0)
 	{
@@ -954,6 +930,18 @@ ShaderHandle DX12DeviceImpl::compileShader(const GfxShaderDesc* desc)
 	uint64_t id = m_nextId++;
 	m_shaders.emplace(id, std::move(sh));
 	return { id };
+}
+
+void DX12DeviceImpl::reportShaderMessages(const char* what, const char* name, const std::string& messages, bool failed)
+{
+	if (messages.empty() && !failed)
+		return;
+	std::string text = std::string(what) + (failed ? ": シェーダーのコンパイルに失敗しました" : ": シェーダーの警告");
+	if (name && *name)
+		text += std::string(" (") + name + ")";
+	if (!messages.empty())
+		text += "\n" + messages;
+	emitDebugMessage(failed ? GfxMessageSeverity::Error : GfxMessageSeverity::Warning, GFX_MESSAGE_ID_SHADER_COMPILE, text.c_str());
 }
 
 // 頂点 / インデックス / 定数バッファとして実行中のコマンドが参照している可能性があるため遅延解放する
@@ -1149,10 +1137,8 @@ void DX12DeviceImpl::shutdown()
 	m_device.Reset();
 }
 
-// デフォルト RootSignature を作成する
-// デフォルト RootSignature と PSO を作成する
-// dxcompiler.dll が存在する場合は実行時 HLSL コンパイルで PSO を生成する。
-// 存在しない場合は RootSignature のみ作成し PSO は nullptr のままにする。
+// デフォルト RootSignature と PSO を作成する (旧経路の bindShader 用)
+// シェーダーをコンパイルできない場合 (dxcompiler.dll がないなど) は RootSignature だけを作り、PSO は nullptr のままにする。
 bool DX12DeviceImpl::createDefaultPSO()
 {
 	// ---- RootSignature ----
@@ -1217,9 +1203,7 @@ bool DX12DeviceImpl::createDefaultPSO()
 			IID_PPV_ARGS(&m_defaultRootSig))))
 		return false;
 
-	// ---- HLSL ソース ----
-	// D3DCompile (d3dcompiler.lib) で SM 5.1 の DXBC を生成する。
-	// dxcompiler.dll 不要。Windows SDK 付属の d3dcompiler_47.dll で動作する。
+	// ---- HLSL ソース (DXC でコンパイルする) ----
 	static const char* k_VS_SRC =
 		"float4 main(uint id : SV_VertexID) : SV_Position {"
 		"  float2 uv = float2((id & 1u) << 1u, id >> 1u);"
@@ -1231,36 +1215,20 @@ bool DX12DeviceImpl::createDefaultPSO()
 		"  return float4(1.0f, 1.0f, 1.0f, 1.0f);"
 		"}";
 
-	// D3DCompile を使って DXBC バイトコードを生成する
-	auto compile = [](const char* src, const char* profile) -> ComPtr<ID3DBlob>
+	auto compile = [&](const char* src, ShaderStage stage, DX12ShaderOutput& out) -> bool
 	{
-		ComPtr<ID3DBlob> code;
-		ComPtr<ID3DBlob> err;
-		HRESULT hr = D3DCompile(
-			src,
-			strlen(src),
-			nullptr,        // sourceName
-			nullptr,        // defines
-			nullptr,        // includes
-			"main",
-			profile,
-			D3DCOMPILE_OPTIMIZATION_LEVEL1,
-			0,
-			&code,
-			&err);
-
-		if (FAILED(hr))
-			return nullptr;
-
-		return code;
+		GfxShaderDesc d = {};
+		d.stage      = stage;
+		d.source     = src;
+		d.sourceName = "default_pso.hlsl";
+		return m_shaderCompiler.compile(d, dx12DefaultShaderProfile(stage), out);
 	};
 
-	ComPtr<ID3DBlob> vsBlob = compile(k_VS_SRC, "vs_5_1");
-	ComPtr<ID3DBlob> psBlob = compile(k_PS_SRC, "ps_5_1");
-
-	if (!vsBlob || !psBlob)
+	DX12ShaderOutput vsOut, psOut;
+	if (!compile(k_VS_SRC, ShaderStage::Vertex, vsOut) || !compile(k_PS_SRC, ShaderStage::Fragment, psOut))
 	{
-		// コンパイル失敗は致命的にしない。PSO なしで続行する。
+		// コンパイル失敗は致命的にしない (旧経路の既定 PSO がないだけ)。理由は通知する
+		reportShaderMessages("createDefaultPSO", nullptr, vsOut.messages.empty() ? psOut.messages : vsOut.messages, true);
 		return true;
 	}
 
@@ -1269,8 +1237,8 @@ bool DX12DeviceImpl::createDefaultPSO()
 	{
 		D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc               = {};
 		psoDesc.pRootSignature                                    = m_defaultRootSig.Get();
-		psoDesc.VS                                                = { vsBlob->GetBufferPointer(), vsBlob->GetBufferSize() };
-		psoDesc.PS                                                = { psBlob->GetBufferPointer(), psBlob->GetBufferSize() };
+		psoDesc.VS                                                = { vsOut.bytecode.data(), vsOut.bytecode.size() };
+		psoDesc.PS                                                = { psOut.bytecode.data(), psOut.bytecode.size() };
 		psoDesc.RasterizerState.FillMode                          = D3D12_FILL_MODE_SOLID;
 		psoDesc.RasterizerState.CullMode                          = D3D12_CULL_MODE_NONE;
 		psoDesc.RasterizerState.FrontCounterClockwise             = FALSE;

@@ -9,6 +9,7 @@
 #include "DX12Resources.h"
 #include "DX12SwapChain.h"
 #include "DX12Pipeline.h"
+#include "DX12ShaderCompiler.h"
 
 // ============================================================
 //  DX12DeviceImpl
@@ -281,6 +282,11 @@ public:
 	// GPU の全コマンド完了を待機する
 	void waitGPUIdle();
 
+	// HLSL のコンパイラー (DXC)
+	DX12ShaderCompiler& shaderCompiler() { return m_shaderCompiler; }
+	// コンパイルのエラー / 警告をデバッグメッセージで通知する
+	void reportShaderMessages(const char* what, const char* name, const std::string& messages, bool failed);
+
 	// フォーマットに合った PSO を返す。
 	// BGRA8 以外 (UNKNOWN 含む) はすべて RGBA8 PSO にフォールバックする
 	ID3D12PipelineState* defaultPSOForFormat(DXGI_FORMAT fmt)
@@ -387,6 +393,8 @@ private:
 	bool createDefaultPSO();
 	bool createSubmitFence();
 	bool createCommandSignatures();
+
+	DX12ShaderCompiler m_shaderCompiler;
 
 	// ExecuteIndirect 用のコマンドシグネチャ (引数のみ、ルート引数の変更なし)
 	ComPtr<ID3D12CommandSignature> m_drawSig;

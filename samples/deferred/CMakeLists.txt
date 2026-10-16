@@ -50,7 +50,7 @@ set_target_properties(GfxExample PROPERTIES
     XCODE_SCHEME_WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
 )
 
-# ---- 本体 DLL / バックエンド DLL / dxcompiler.dll を exe の横に配置する ----
+# ---- 本体 DLL / バックエンド DLL / dxcompiler.dll / dxil.dll を exe の横に配置する ----
 # (単独ビルドでは同じ bin/ に出力済みなので実質何もしないが、外部のアプリと同じ手順を使う)
 sunset_gfx_deploy_runtime(GfxExample)
 

@@ -347,91 +347,12 @@ void DX12DeviceImpl::updateTLAS(TLASHandle h, const GfxTLASInstance* instances, 
 }
 
 // ============================================================
-//  DXC を使って RT シェーダーをコンパイルするヘルパー
-// ============================================================
-static bool compileRTShader(
-	const char*           hlslSource,
-	const wchar_t*        entryPoint,
-	const wchar_t*        profile,
-	std::vector<uint8_t>& outBytecode)
-{
-#ifndef GFX_HAS_DXC
-	OutputDebugStringA("[GfxEngine] compileRTShader: DXC not available (set GFX_DXC_DIR in cmake)\n");
-	(void)hlslSource; (void)entryPoint; (void)profile; (void)outBytecode;
-	return false;
-#else
-	// dxcompiler.dll を動的ロードする
-	static HMODULE s_dxc = LoadLibraryW(L"dxcompiler.dll");
-	if (!s_dxc)
-	{
-		OutputDebugStringA("[GfxEngine] dxcompiler.dll not found\n");
-		return false;
-	}
-
-	typedef HRESULT(WINAPI* PFN_DxcCreateInstance)(REFCLSID, REFIID, LPVOID*);
-	auto pfn = reinterpret_cast<PFN_DxcCreateInstance>(
-		GetProcAddress(s_dxc, "DxcCreateInstance"));
-	if (!pfn) return false;
-
-	ComPtr<IDxcCompiler3> compiler;
-	ComPtr<IDxcUtils>     utils;
-	pfn(CLSID_DxcCompiler, IID_PPV_ARGS(&compiler));
-	pfn(CLSID_DxcUtils,    IID_PPV_ARGS(&utils));
-	if (!compiler || !utils) return false;
-
-	DxcBuffer src;
-	src.Ptr      = hlslSource;
-	src.Size     = strlen(hlslSource);
-	src.Encoding = CP_UTF8;
-
-	const wchar_t* args[] = {
-		L"-E", entryPoint,
-		L"-T", profile,
-		L"-HV", L"2021",
-		L"-Zpc",   // column-major
-	};
-
-	ComPtr<IDxcResult> result;
-	HRESULT hr = compiler->Compile(&src, args, _countof(args),
-		nullptr, IID_PPV_ARGS(&result));
-
-	ComPtr<IDxcBlobUtf8> errors;
-	result->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&errors), nullptr);
-	if (errors && errors->GetStringLength() > 0)
-	{
-		OutputDebugStringA("[GfxEngine] RT shader compile error:\n");
-		OutputDebugStringA(errors->GetStringPointer());
-		fprintf(stderr, "[GfxEngine] RT shader compile error:\n%s\n",
-			errors->GetStringPointer());
-	}
-
-	if (FAILED(hr)) return false;
-
-	HRESULT status;
-	result->GetStatus(&status);
-	if (FAILED(status)) return false;
-
-	ComPtr<IDxcBlob> blob;
-	result->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&blob), nullptr);
-	if (!blob) return false;
-
-	const uint8_t* p = static_cast<const uint8_t*>(blob->GetBufferPointer());
-	outBytecode.assign(p, p + blob->GetBufferSize());
-	return true;
-#endif // GFX_HAS_DXC
-}
-
-// ============================================================
 //  RT パイプライン (RTPSO)
 // ============================================================
 RTPipelineHandle DX12DeviceImpl::createRTPipeline(const GfxRTPipelineDesc* desc)
 {
 	if (!supportsRaytracing()) return {};
 	if (!desc->raygenSource || !desc->missSource || !desc->closestHitSource) return {};
-#ifndef GFX_HAS_DXC
-	OutputDebugStringA("[GfxEngine] createRTPipeline: DXC not available\n");
-	return {};
-#else
 	// 3つのシェーダーソースを1つの lib としてコンパイルする
 	// 各ソースをそのまま結合する（重複定義は各ソース側で避けること）
 	std::string combined =
@@ -439,12 +360,12 @@ RTPipelineHandle DX12DeviceImpl::createRTPipeline(const GfxRTPipelineDesc* desc)
 		std::string(desc->missSource)   + "\n" +
 		std::string(desc->closestHitSource);
 
-	std::vector<uint8_t> bytecode;
-	if (!compileRTShader(combined.c_str(), L"", L"lib_6_3", bytecode))
-	{
-		OutputDebugStringA("[GfxEngine] createRTPipeline: shader compile failed\n");
+	DX12ShaderOutput compiled;
+	const bool compiledOk = m_shaderCompiler.compileLibrary(combined.c_str(), "lib_6_3", compiled);
+	reportShaderMessages("createRTPipeline", nullptr, compiled.messages, !compiledOk);
+	if (!compiledOk)
 		return {};
-	}
+	const std::vector<uint8_t>& bytecode = compiled.bytecode;
 
 	// エントリポイント名
 	const wchar_t* k_raygen     = L"RayGen";
@@ -610,7 +531,6 @@ RTPipelineHandle DX12DeviceImpl::createRTPipeline(const GfxRTPipelineDesc* desc)
 
 	OutputDebugStringA("[GfxEngine] createRTPipeline: OK\n");
 	return { id };
-#endif // GFX_HAS_DXC
 }
 
 void DX12DeviceImpl::destroyRTPipeline(RTPipelineHandle h)

@@ -6,8 +6,9 @@
 #    GFX_CreateBackend()   → IBackendPlugin*
 #    GFX_DestroyBackend()  → void
 #
-#  依存 (Windows SDK に同梱):
-#    d3d12.lib / dxgi.lib / dxguid.lib / d3dcompiler.lib
+#  依存:
+#    d3d12.lib / dxgi.lib / dxguid.lib (Windows SDK)
+#    DXC のヘッダー (cmake/GfxDxc.cmake。dxcompiler.dll は実行時に LoadLibrary する)
 # ============================================================
 add_library(gfx_dx12 SHARED
     # 宣言 (DX12Device.h がすべてを include する)
@@ -19,6 +20,7 @@ add_library(gfx_dx12 SHARED
     DX12SwapChain.h
     DX12Pipeline.h
     DX12Device.h
+    DX12ShaderCompiler.h  # DXC による HLSL のコンパイル
     # 実装
     DX12Export.cpp        # vtable と DLL のエクスポート関数
     DX12Device.cpp        # 初期化 / submit / 遅延解放 / ディスクリプタ / バッファ / Compute / クエリ
@@ -27,6 +29,7 @@ add_library(gfx_dx12 SHARED
     DX12CommandBuffer.cpp # コマンドの記録と状態追跡
     DX12Resources.cpp     # テクスチャ / ビュー / サンプラー、RT / DS
     DX12SwapChain.cpp
+    DX12ShaderCompiler.cpp
 )
 
 target_link_libraries(gfx_dx12 PRIVATE
@@ -35,18 +38,12 @@ target_link_libraries(gfx_dx12 PRIVATE
     d3d12
     dxgi
     dxguid
-    d3dcompiler
 )
 
-# ---- DXC (オプション) ----
-# 見つかれば HLSL → DXIL (DXR の lib_6_x など) のコンパイルを有効にする
-if(GFX_DXC_FOUND)
-    if(GFX_DXC_INCLUDE_DIR)
-        target_include_directories(gfx_dx12 PRIVATE "${GFX_DXC_INCLUDE_DIR}")
-    endif()
-    target_link_libraries(gfx_dx12 PRIVATE "${GFX_DXC_LIBRARY}")
-    target_compile_definitions(gfx_dx12 PRIVATE GFX_HAS_DXC=1)
-endif()
+# ---- DXC ----
+# すべての HLSL を DXC で DXIL にコンパイルする。dxcapi.h / d3d12shader.h は DXC のものを使う
+# (Windows SDK の d3d12shader.h より先に見つかるように、通常のインクルードパスとして追加する)
+target_include_directories(gfx_dx12 PRIVATE "${GFX_DXC_INCLUDE_DIR}")
 
 # ---- シンボル可視性 ----
 # WINDOWS_EXPORT_ALL_SYMBOLS=OFF にすることで

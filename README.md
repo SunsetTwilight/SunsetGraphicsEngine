@@ -131,24 +131,28 @@ cmake --build build/release
 | `GFX_BUILD_TESTS` | 単独ビルド時 `ON` / 取り込まれたとき `OFF` | 自動テスト (doctest) をビルドする。configure 時に doctest を取得する |
 | `GFX_INSTALL` | `ON` | install / export (find_package 用) の規則を生成する |
 | `GFX_ENABLE_VALIDATION` | `OFF` | GPU バリデーション / デバッグレイヤーを有効にする |
-| `GFX_DXC_DIR` | *(空)* | DXC のルートディレクトリ (HLSL → DXIL コンパイルを有効化) |
+| `GFX_DXC_DIR` | *(空)* | DXC のルートディレクトリ。空なら公式リリースを自動で取得する (下記) |
 
 ---
 
 ## DXC の指定 (Windows)
 
-HLSL シェーダーのコンパイルには DirectX Shader Compiler (DXC) が必要です。  
-省略時はシェーダーコンパイルがスタブになります。
+DX12 バックエンドは、すべての HLSL を DirectX Shader Compiler (DXC) で DXIL にコンパイルします
+(既定のプロファイルは `<stage>_6_0`。`GfxShaderDesc::targetProfile` で変更できます)。
+
+DXC は configure 時に公式リリース ([microsoft/DirectXShaderCompiler](https://github.com/microsoft/DirectXShaderCompiler)
+v1.8.2505) のアーカイブを取得します (バージョンと SHA256 は `cmake/GfxDxc.cmake` で固定)。
+実行時には `dxcompiler.dll` と `dxil.dll` (DXIL の署名用) が exe の横に必要で、
+`sunset_gfx_deploy_runtime()` がコピーします。
+
+手元の DXC を使う場合は、`inc/dxcapi.h` と `bin/x64/dxcompiler.dll` を含むフォルダを指定します。
 
 ```bat
-:: Vulkan SDK に同梱の DXC を使う場合
-cmake --preset windows-debug ^
-      -DGFX_DXC_DIR="%VULKAN_SDK%"
-
-:: Windows SDK に同梱の DXC を使う場合
-cmake --preset windows-debug ^
-      -DGFX_DXC_DIR="C:\Program Files (x86)\Windows Kits\10\bin\10.0.22621.0\x64"
+cmake --preset windows-debug -DGFX_DXC_DIR="C:\dxc_2025_05_24"
 ```
+
+コンパイルのエラーと警告は、デバッグメッセージのコールバック (`DeviceConfig::debugMessage`、
+id = `GFX_MESSAGE_ID_SHADER_COMPILE`) で通知されます。コールバックがなければ stderr に出力します。
 
 ---
 
@@ -159,7 +163,8 @@ build/<プリセット>/bin/
 ├── GfxExample.exe        ← サンプルアプリ (Windows)
 ├── shaders/              ← サンプルの HLSL
 ├── SunsetGraphicsEngine.dll ← エンジン本体
-├── dxcompiler.dll        ← DXC (DXR のシェーダーコンパイル用)
+├── dxcompiler.dll        ← DXC (HLSL → DXIL)
+├── dxil.dll              ← DXIL の署名
 ├── GfxExample            ← サンプルアプリ (Linux)
 ├── gfx_dx12.dll          ← DX12 バックエンド (Windows)
 ├── gfx_vulkan.dll        ← Vulkan バックエンド (Windows)
@@ -259,7 +264,7 @@ cmake --install build/linux-release --prefix /usr/local
 | インストール先 | 内容 |
 |---------------|------|
 | `<prefix>/include/gfx/` | ヘッダファイル (`gfx/abi`、`gfx/schema`、`gfx/core`) |
-| `<prefix>/bin/` | `SunsetGraphicsEngine.dll`、`gfx_dx12.dll`、`dxcompiler.dll` (Windows) |
+| `<prefix>/bin/` | `SunsetGraphicsEngine.dll`、`gfx_dx12.dll`、`dxcompiler.dll`、`dxil.dll` (Windows) |
 | `<prefix>/lib/` | インポートライブラリ (Windows)、共有ライブラリ (Linux / macOS) |
 | `<prefix>/lib/cmake/SunsetGraphicsEngine/` | `find_package(SunsetGraphicsEngine)` 用の設定ファイル |
 
@@ -290,7 +295,7 @@ find_package(SunsetGraphicsEngine 0.1 REQUIRED)
 
 add_executable(MyApp main.cpp)
 target_link_libraries(MyApp PRIVATE SunsetGraphicsEngine::core)
-sunset_gfx_deploy_runtime(MyApp)   # SunsetGraphicsEngine.dll / gfx_dx12.dll / dxcompiler.dll をコピー
+sunset_gfx_deploy_runtime(MyApp)   # SunsetGraphicsEngine.dll / gfx_dx12.dll / dxcompiler.dll / dxil.dll をコピー
 ```
 
 ```cpp

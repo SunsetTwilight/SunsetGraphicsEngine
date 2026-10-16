@@ -198,8 +198,9 @@ struct DX12SamplerRes { uint32_t slot = 0; };   // 静的サンプラースロ�
 // コンパイル済みシェーダーリソース
 struct DX12ShadRes
 {
-	std::vector<uint8_t> bytecode;  // DXBC バイトコード
-	ShaderStage          stage      = ShaderStage::Vertex;
+	std::vector<uint8_t>     bytecode;      // DXIL コンテナ (リフレクションは外してある)
+	ShaderStage              stage = ShaderStage::Vertex;
+	std::vector<std::string> dependencies;  // #include で読み込んだファイル
 };
 
 // クエリプール (クエリヒープ + 読み出し用の READBACK バッファ)
