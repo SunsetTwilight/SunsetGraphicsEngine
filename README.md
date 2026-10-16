@@ -282,7 +282,7 @@ cmake --install build/linux-release --prefix /usr/local
 
 ```cmake
 # インストール済みのパッケージを使う場合
-find_package(SunsetGraphicsEngine 1 REQUIRED)
+find_package(SunsetGraphicsEngine 0.1 REQUIRED)
 
 # または FetchContent で取り込む場合 (取り込まれたときはサンプルをビルドしない)
 # FetchContent_Declare(SunsetGraphicsEngine GIT_REPOSITORY ... GIT_TAG ...)

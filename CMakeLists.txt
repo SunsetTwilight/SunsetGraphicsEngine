@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SunsetGraphicsEngine VERSION 1.0.0 LANGUAGES CXX)
+project(SunsetGraphicsEngine VERSION 0.1.0 LANGUAGES CXX)
 
 # ============================================================
 #  ディレクトリ構成と依存の向き
@@ -110,7 +110,8 @@ if(GFX_INSTALL)
     write_basic_package_version_file(
         "${CMAKE_CURRENT_BINARY_DIR}/SunsetGraphicsEngineConfigVersion.cmake"
         VERSION       ${PROJECT_VERSION}
-        COMPATIBILITY SameMajorVersion
+        # 0.x の間はマイナーバージョンで API が変わりうるため、マイナーまで一致を要求する
+        COMPATIBILITY SameMinorVersion
     )
     install(FILES
             "${CMAKE_CURRENT_BINARY_DIR}/SunsetGraphicsEngineConfig.cmake"
