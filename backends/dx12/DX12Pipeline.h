@@ -42,6 +42,7 @@ struct DX12BindingLayoutRes
 //  GfxGraphicsPipelineDesc (v2) から PSO を事前作成して保持する。
 //  v1 の GfxPipelineDesc は DX12DeviceImpl::createPipeline で v2 に変換してから作る。
 //  bindPipeline で SetPipelineState を呼ぶだけになる。
+//  作成に使った記述子を保持し、シェーダーの更新 (ホットリロード) や記述子の変更で PSO を作り直せる。
 // ============================================================
 class DX12PipelineImpl
 {
@@ -51,6 +52,22 @@ public:
 	bool create(DX12DeviceImpl* dev, const GfxGraphicsPipelineDesc& desc, const DX12BindingLayoutRes& layout);
 	bool createCompute(DX12DeviceImpl* dev, const GfxComputePipelineDesc& desc, const DX12BindingLayoutRes& layout);
 	bool isCompute() const { return m_isCompute; }
+
+	// 記述子から PSO を作る (このオブジェクトは変えない)。失敗したらエラーを通知して nullptr
+	static ComPtr<ID3D12PipelineState> buildGraphicsPSO(DX12DeviceImpl* dev, const GfxGraphicsPipelineDesc& desc, ID3D12RootSignature* rootSig);
+	static ComPtr<ID3D12PipelineState> buildComputePSO (DX12DeviceImpl* dev, const GfxComputePipelineDesc&  desc, ID3D12RootSignature* rootSig);
+
+	// 今の記述子と、今のシェーダーのバイトコードで PSO を作る (シェーダーの更新用)
+	ComPtr<ID3D12PipelineState> rebuildPSO() const;
+	bool usesShader(uint64_t shaderId) const;
+
+	// 記述子 / レイアウト / PSO を入れ替え、古い PSO を返す (呼び出し側が遅延解放する)
+	ComPtr<ID3D12PipelineState> replace(const GfxGraphicsPipelineDesc& desc, const DX12BindingLayoutRes& layout, ComPtr<ID3D12PipelineState> pso);
+	ComPtr<ID3D12PipelineState> replace(const GfxComputePipelineDesc&  desc, const DX12BindingLayoutRes& layout, ComPtr<ID3D12PipelineState> pso);
+	ComPtr<ID3D12PipelineState> swapPSO(ComPtr<ID3D12PipelineState> pso) { std::swap(m_pso, pso); return pso; }
+
+	const GfxGraphicsPipelineDesc& graphicsDesc() const { return m_graphicsDesc; }
+	const GfxComputePipelineDesc&  computeDesc()  const { return m_computeDesc;  }
 	const DX12BindingSlots& slots() const { return m_slots; }
 
 	ID3D12PipelineState* pso()     const { return m_pso.Get();     }
@@ -90,6 +107,12 @@ private:
 	DX12BindingSlots       m_slots;
 	D3D_PRIMITIVE_TOPOLOGY m_topology = D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST;
 	bool                   m_isCompute = false;
+
+	// 作成に使った記述子 (debugName は m_debugName を指す)
+	GfxGraphicsPipelineDesc m_graphicsDesc;
+	GfxComputePipelineDesc  m_computeDesc;
+	std::string             m_debugName;
+	void keepDebugName(const char*& name);
 };
 
 struct DX12PSOKey

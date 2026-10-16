@@ -96,6 +96,17 @@ struct GfxDeviceVTable {
 	// #include で読み込んだファイルのパスを改行 ('\n') 区切りで buffer に書く ('\0' 終端)。
 	// 戻り値は必要なバイト数 ('\0' を含む)。bufferSize が足りなければ何も書かない (buffer = nullptr で問い合わせ)
 	uint32_t (*getShaderDependencies)(void* self, ShaderHandle h, char* buffer, uint32_t bufferSize);
+
+	// ---- ABI 7: シェーダー / パイプラインの作り直し (ホットリロード、エディターでの変更) ----
+	// ハンドルはそのままで中身を入れ替える。全部作れたときだけ入れ替え、失敗したら何も変えずに false。
+	// updateShader はそのシェーダーを使うパイプラインも作り直す (ステージは変えられない)。
+	// 記録中のコマンドバッファでバインド済みのパイプラインを、その記録中に更新しないこと。
+	bool (*updateShader)           (void* self, ShaderHandle h, const GfxShaderDesc* desc);
+	bool (*updateGraphicsPipeline) (void* self, PipelineHandle h, const GfxGraphicsPipelineDesc* desc);
+	bool (*updateComputePipeline)  (void* self, PipelineHandle h, const GfxComputePipelineDesc* desc);
+	// パイプラインの今の記述子 (out->structSize までを書く。debugName はパイプラインが生きている間だけ有効)
+	bool (*getGraphicsPipelineDesc)(const void* self, PipelineHandle h, GfxGraphicsPipelineDesc* out);
+	bool (*getComputePipelineDesc) (const void* self, PipelineHandle h, GfxComputePipelineDesc* out);
 };
 
 // ============================================================
@@ -156,6 +167,11 @@ struct IBackendPlugin {
 	SamplerHandle       createSampler       (const GfxSamplerStateDesc& d)     { return vtable->createSamplerState(self, &d);     }
 	bool                getShaderReflection (ShaderHandle h, GfxShaderReflection& out) { return vtable->getShaderReflection(self, h, &out); }
 	uint32_t            getShaderDependencies(ShaderHandle h, char* buf, uint32_t size) { return vtable->getShaderDependencies(self, h, buf, size); }
+	bool                updateShader        (ShaderHandle h, const GfxShaderDesc& d)              { return vtable->updateShader(self, h, &d); }
+	bool                updatePipeline      (PipelineHandle h, const GfxGraphicsPipelineDesc& d)  { return vtable->updateGraphicsPipeline(self, h, &d); }
+	bool                updatePipeline      (PipelineHandle h, const GfxComputePipelineDesc& d)   { return vtable->updateComputePipeline(self, h, &d); }
+	bool                getPipelineDesc     (PipelineHandle h, GfxGraphicsPipelineDesc& out) const { return vtable->getGraphicsPipelineDesc(self, h, &out); }
+	bool                getPipelineDesc     (PipelineHandle h, GfxComputePipelineDesc& out) const  { return vtable->getComputePipelineDesc(self, h, &out); }
 
 	void bindTexture   (TextureHandle h, uint32_t s)  { vtable->bindTexture(self, h, s);  }
 	void draw          (const GfxDrawCmd& cmd)        { vtable->draw(self, &cmd);         }

@@ -120,6 +120,23 @@ Phase 1 の静的ディスクリプタ領域は、Phase 2 でそのまま**バ�
 
 サンプル: パスごとの GPU 時間とオクルージョンをログに出す。グリッドは 4x MSAA の RT に描いて resolve し、乗算済みアルファで合成する(drawIndirect、v2 のビュー / サンプラー / setDescriptorTable を使用)。起動時に Compute / dispatchIndirect / 手動バリア / コピー / 範囲クリアの確認を 1 回実行する。
 
+### Phase 2c の実装状況(完了、M1)
+
+`GFX_ABI_VERSION` は 7。
+
+| 項目 | 内容 |
+|------|------|
+| DXC への統一 | D3DCompile (FXC) を削除し、すべての HLSL を DXC で DXIL にコンパイルする(既定のプロファイルは `<stage>_6_0`)。DXC は公式リリース v1.8.2505 を configure 時に取得する(`cmake/GfxDxc.cmake`、`GFX_DXC_DIR` で上書き可)。`dxcompiler.dll` と `dxil.dll` を配置する |
+| シェーダーの記述子 | `GfxShaderDesc` に `sourceName`(エラーメッセージと相対 `#include` の基準)、`targetProfile`、`defines`、`includeDirs`、`flags`(Debug / SkipOptimization / WarningsAsErrors)。`ShaderStage` に Geometry / Hull / Domain |
+| エラーの通知 | コンパイルのエラーと警告は、デバッグメッセージのコールバックに `GFX_MESSAGE_ID_SHADER_COMPILE` で通知する(validation に関係なく)。パイプラインの作成失敗は `GFX_MESSAGE_ID_PIPELINE` |
+| リフレクション | `GfxShaderReflection`(`gfx/abi/ShaderReflection.h`):バインディング(名前、種類、次元、register、space、数)、定数バッファ(構造体のメンバーを `parent.member` に展開し、オフセットとサイズ、型、行列の向き)、入出力シグネチャ、スレッドグループのサイズ、シェーダーモデル。X マクロで定義したのでスキーマと JSON にもそのまま載る。`getShaderReflection` は呼び出し側の `structSize` までだけを書く |
+| 依存ファイル | `#include` で読み込んだファイルを記録し、`getShaderDependencies` で返す(ホットリロードの監視対象) |
+| JSON | `gfx/schema/GfxJson.h`(外部依存なし)。スキーマの表をたどる汎用の変換 `gfxToJson` / `gfxFromJson`。列挙型は名前、フラグは名前の配列、既定値と同じフィールドは省く、float は最短表記、ハンドルは変換関数でアセットの参照に置き換える、エラーはフィールドのパス付き。`gfxDescribeStruct` / `gfxDescribeEnum` はエディターのフォーム生成用の型の説明 |
+| 作り直し | `updateShader`(再コンパイルし、そのシェーダーを使うパイプラインも作り直す)、`updatePipeline`(記述子を変えて PSO を作り直す)、`getPipelineDesc`。ハンドルはそのままで、全部作れたときだけ入れ替える。古い PSO は遅延解放する |
+| ホットリロード | `gfx/core/ShaderLibrary.h`(ヘッダーのみ)。ファイルからシェーダーを作り、`poll()` で本体と `#include` の更新時刻を見て作り直す。保存の途中を読まないよう、変化が止まるまで待つ。失敗したら元のシェーダーのまま描画を続ける。サンプルはソースの `shaders/` を直接読み、保存するとすぐ反映される |
+
+完了条件の確認(テスト):記述子を JSON にしてハンドルを名前に置き換え、読み戻した記述子で作ったパイプラインの記述子が元と一致し、描画できる(`tests/test_reload.cpp`)。シェーダーのファイルと `#include` を書き換えると作り直され、壊れた変更では元のまま描画を続ける(同上、サンプルでも確認)。
+
 ### 記述子の共通ルール
 
 - すべて C の POD にする。先頭に `uint32_t structSize; uint32_t version;` を置く。
@@ -190,7 +207,7 @@ struct GfxDepthStencilStateDesc {
 
 ### シェーダー
 
-- DXC に統一する(DXIL を出力し、Vulkan 向けには `-spirv` で SPIR-V を出力する)。
+- DXC に統一する(DXIL を出力し、Vulkan 向けには `-spirv` で SPIR-V を出力する)。DXIL は 2c で実装済み。
 - **リフレクション**を ABI で返す。返す内容は、バインディング(名前、種類、register、space、数)、cbuffer のレイアウト(メンバー名、型、オフセット)、入力シグネチャ。
   - エディターでは、マテリアルのパラメータ UI を自動生成したり、バインド漏れを検出したりするのに使う。
 
@@ -307,18 +324,18 @@ Graph
 
 ## 実装順序と完了条件
 
-M0 (テスト、CI、v0.1.0 のタグ) は完了した。以降はマイルストーン (M) 単位で進める。
+M0 (テスト、CI、v0.1.0 のタグ) と M1 (Phase 2c、v0.2.0) は完了した。以降はマイルストーン (M) 単位で進める。
 
 | マイルストーン | 内容 | 完了条件 |
 |---------------|------|---------|
 | ~~M0~~ | doctest のテスト、GitHub Actions (WARP)、v0.1.0 のタグ | 完了 |
-| M1 (Phase 2c) | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 記述子を JSON にして戻すと同じ PSO が作れる。シェーダーを書き換えると再読み込みされる |
+| ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
 | M2 (Studio) | エディターの骨格 (webview、Bridge、ビューポート、インスペクター、統計)。段階 M2a〜M2d は editor-shell.md を参照 | M2a/M2b は M1 と並行できる。M2c は M1 の JSON の往復に依存する |
 | M3 (Phase 3a/3b) | レンダーグラフのコア、サンプルのディファードをグラフに移行、JSON の保存と読み込み | グラフからサンプルと同じ画が出る。バリアが自動で生成される |
 | M4 | エディターの MVP(グラフ編集、リソースビューアー、Undo/Redo) | ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 
-完了済みの Phase:1、2a、2b。
+完了済みの Phase:1、2a、2b、2c。
 
 ## 未解決の論点
 

@@ -316,6 +316,16 @@ public:
 	BindingLayoutHandle createBindingLayout (const GfxBindingLayoutDesc&    d) { auto* p = device(); return p ? p->createBindingLayout(d) : BindingLayoutHandle{}; }
 	void                destroyBindingLayout(BindingLayoutHandle h)            { if (auto* p = device()) p->destroyBindingLayout(h); }
 	PipelineHandle      createPipeline      (const GfxComputePipelineDesc&  d) { auto* p = device(); return p ? p->createPipeline(d)      : PipelineHandle{};      }
+
+	// ハンドルはそのままで中身を作り直す。失敗したら何も変えずに false (理由はデバッグメッセージ)
+	//   updateShader   : シェーダーを再コンパイルし、それを使うパイプラインも作り直す (ホットリロード)
+	//   updatePipeline : 記述子を変えて PSO を作り直す (エディターでのステートの変更)
+	bool updateShader  (ShaderHandle h, const ShaderDesc& d)                { auto* p = device(); return p && p->updateShader(h, d);   }
+	bool updatePipeline(PipelineHandle h, const GfxGraphicsPipelineDesc& d) { auto* p = device(); return p && p->updatePipeline(h, d); }
+	bool updatePipeline(PipelineHandle h, const GfxComputePipelineDesc& d)  { auto* p = device(); return p && p->updatePipeline(h, d); }
+	// パイプラインの今の記述子 (debugName はパイプラインが生きている間だけ有効)
+	bool getPipelineDesc(PipelineHandle h, GfxGraphicsPipelineDesc& out) const { auto* p = device(); return p && p->getPipelineDesc(h, out); }
+	bool getPipelineDesc(PipelineHandle h, GfxComputePipelineDesc& out) const  { auto* p = device(); return p && p->getPipelineDesc(h, out); }
 	// クエリ (タイムスタンプ / オクルージョン)
 	QueryPoolHandle createQueryPool (const GfxQueryPoolDesc& d) { auto* p = device(); return p ? p->createQueryPool(d) : QueryPoolHandle{}; }
 	void            destroyQueryPool(QueryPoolHandle h)         { if (auto* p = device()) p->destroyQueryPool(h); }

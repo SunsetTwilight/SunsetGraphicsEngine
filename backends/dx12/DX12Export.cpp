@@ -413,6 +413,26 @@ static const GfxDeviceVTable k_DX12DevVTable =
 	{
 		return static_cast<DX12DeviceImpl*>(s)->getShaderDependencies(h, buffer, bufferSize);
 	},
+	[](void* s, ShaderHandle h, const GfxShaderDesc* d) -> bool
+	{
+		return static_cast<DX12DeviceImpl*>(s)->updateShader(h, d);
+	},
+	[](void* s, PipelineHandle h, const GfxGraphicsPipelineDesc* d) -> bool
+	{
+		return static_cast<DX12DeviceImpl*>(s)->updateGraphicsPipeline(h, d);
+	},
+	[](void* s, PipelineHandle h, const GfxComputePipelineDesc* d) -> bool
+	{
+		return static_cast<DX12DeviceImpl*>(s)->updateComputePipeline(h, d);
+	},
+	[](const void* s, PipelineHandle h, GfxGraphicsPipelineDesc* out) -> bool
+	{
+		return static_cast<const DX12DeviceImpl*>(s)->getGraphicsPipelineDesc(h, out);
+	},
+	[](const void* s, PipelineHandle h, GfxComputePipelineDesc* out) -> bool
+	{
+		return static_cast<const DX12DeviceImpl*>(s)->getComputePipelineDesc(h, out);
+	},
 };
 const GfxDeviceVTable* DX12DeviceImpl::getVTable() { return &k_DX12DevVTable; }
 

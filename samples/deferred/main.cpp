@@ -18,6 +18,7 @@
 // ============================================================
 #include "SampleUtils.h"
 #include "ShaderFiles.h"
+#include "gfx/core/ShaderLibrary.h"
 #include "Win32Window.h"
 #include <cstring>
 #include <iostream>
@@ -54,6 +55,21 @@ int main()
 			throw std::runtime_error("[Error] engine.init() failed");
 
 		std::cout << "Adapter: " << engine.adapterName() << "\n";
+
+		// シェーダーのホットリロード: .hlsl を保存すると、そのシェーダーとパイプラインを作り直す。
+		// ビルドツリーでは samples/deferred/shaders/ (ソース) を、それ以外では exe の横の shaders/ を使う
+		ShaderLibrary shaders(engine);
+		for (const auto& dir : shaderSearchPaths())
+			shaders.addSearchPath(dir);
+		shaders.setOnReload([](ShaderHandle, const std::string& path, bool ok) {
+			std::cout << (ok ? "[HotReload] reloaded: " : "[HotReload] failed (keeping the previous shader): ") << path << "\n";
+		});
+		auto loadShader = [&](const char* file, ShaderStage stage) {
+			ShaderHandle h = shaders.load(file, stage);
+			if (!h.valid())
+				throw std::runtime_error("[Error] " + shaders.lastError());
+			return h;
+		};
 
 		// ---------------------------------------------------
 		//  2. ウィンドウ作成
@@ -117,66 +133,41 @@ int main()
 		// ---------------------------------------------------
 
 		// 頂点シェーダー: MVP 行列で変換し UV を PS に渡す
-		static const std::string k_VS_src = loadShaderSource("forward.vs.hlsl");
-		static const char*       k_VS     = k_VS_src.c_str();
 
 		// ピクセルシェーダー: テクスチャをサンプリングして出力する
 		// テクスチャが未バインドのときは白を出力する
-		static const std::string k_PS_src = loadShaderSource("forward.ps.hlsl");
-		static const char*       k_PS     = k_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  G-Buffer 用 VS (法線付き)
 		//  Position(float3) + Normal(float3) + UV(float2) = 32 bytes
 		// ---------------------------------------------------
-		static const std::string k_GBuf_VS_src = loadShaderSource("gbuffer.vs.hlsl");
-		static const char*       k_GBuf_VS     = k_GBuf_VS_src.c_str();
 
 		// ---------------------------------------------------
 		//  G-Buffer 用 PS: MRT 3 枚 (Albedo / Normal / Emissive)
 		// ---------------------------------------------------
-		static const std::string k_GBuf_PS_src = loadShaderSource("gbuffer.ps.hlsl");
-		static const char*       k_GBuf_PS     = k_GBuf_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  Deferred Lighting 用 PS
 		//  G-Buffer 4枚 (t0=Albedo, t1=Normal, t2=Emissive, t3=Depth) を読み込む
 		//  ポイントライト最大16個を b0 の定数バッファで受け取る
 		// ---------------------------------------------------
-		static const std::string k_Light_VS_src = loadShaderSource("lighting.vs.hlsl");
-		static const char*       k_Light_VS     = k_Light_VS_src.c_str();
 
 		// ---------------------------------------------------
 		//  Grid Line シェーダー
 		// ---------------------------------------------------
-		static const std::string k_Grid_VS_src = loadShaderSource("grid.vs.hlsl");
-		static const char*       k_Grid_VS     = k_Grid_VS_src.c_str();
 
-		static const std::string k_Grid_PS_src = loadShaderSource("grid.ps.hlsl");
-		static const char*       k_Grid_PS     = k_Grid_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  RT Composite シェーダー
 		//  UAV テクスチャをバックバッファにフルスクリーン合成する
 		// ---------------------------------------------------
-		static const std::string k_RTComposite_VS_src = loadShaderSource("rt_composite.vs.hlsl");
-		static const char*       k_RTComposite_VS     = k_RTComposite_VS_src.c_str();
-		static const std::string k_RTComposite_PS_src = loadShaderSource("rt_composite.ps.hlsl");
-		static const char*       k_RTComposite_PS     = k_RTComposite_PS_src.c_str();
 
 		// ---------------------------------------------------
 		//  Shadow Pass VS: 光源視点の MVP で頂点変換のみ
 		//  PS なし (深度書き込みのみ)
 		// ---------------------------------------------------
-		static const std::string k_Shadow_VS_src = loadShaderSource("shadow.vs.hlsl");
-		static const char*       k_Shadow_VS     = k_Shadow_VS_src.c_str();
 
-		static const std::string k_Light_PS_src = loadShaderSource("lighting.ps.hlsl");
-		static const char*       k_Light_PS     = k_Light_PS_src.c_str();
 
-		ShaderDesc vsDesc;
-		vsDesc.stage        = ShaderStage::Vertex;
-		vsDesc.source       = k_VS;
 		// Position(float3) + TexCoord0(float2) = 20 bytes
 		GfxVertexLayout layoutPU;
 		layoutPU.stride = 20;
@@ -184,15 +175,8 @@ int main()
 		layoutPU.add(VertexAttribute::TexCoord0, PixelFormat::R32_FLOAT, 12);
 		// vertexLayout は GfxPipelineDesc で指定する
 
-		ShaderDesc psDesc;
-		psDesc.stage  = ShaderStage::Fragment;
-		psDesc.source = k_PS;
-
-		ShaderHandle vs = engine.compileShader(vsDesc);
-		checkHandle(vs, "compileShader(vs) failed");
-
-		ShaderHandle ps = engine.compileShader(psDesc);
-		checkHandle(ps, "compileShader(ps) failed");
+		ShaderHandle vs = loadShader("forward.vs.hlsl", ShaderStage::Vertex);
+		ShaderHandle ps = loadShader("forward.ps.hlsl", ShaderStage::Fragment);
 
 		// G-Buffer 用 VS/PS (Position + Normal + UV = 32 bytes)
 		GfxVertexLayout layoutPNU;
@@ -201,42 +185,17 @@ int main()
 		layoutPNU.add(VertexAttribute::Normal,    PixelFormat::R32_FLOAT, 12);
 		layoutPNU.add(VertexAttribute::TexCoord0, PixelFormat::R32_FLOAT, 24);
 
-		ShaderDesc gbVSDesc;
-		gbVSDesc.stage        = ShaderStage::Vertex;
-		gbVSDesc.source       = k_GBuf_VS;
 		// vertexLayout は GfxPipelineDesc で指定する
-
-		ShaderDesc gbPSDesc;
-		gbPSDesc.stage  = ShaderStage::Fragment;
-		gbPSDesc.source = k_GBuf_PS;
-
-		ShaderHandle gbVS = engine.compileShader(gbVSDesc);
-		checkHandle(gbVS, "compileShader(gbVS) failed");
-		ShaderHandle gbPS = engine.compileShader(gbPSDesc);
-		checkHandle(gbPS, "compileShader(gbPS) failed");
+		ShaderHandle gbVS = loadShader("gbuffer.vs.hlsl", ShaderStage::Vertex);
+		ShaderHandle gbPS = loadShader("gbuffer.ps.hlsl", ShaderStage::Fragment);
 
 		// Lighting 用 VS/PS (SV_VertexID 使用、頂点バッファ不要。InputLayout なし)
-		ShaderDesc ltVSDesc;
-		ltVSDesc.stage        = ShaderStage::Vertex;
-		ltVSDesc.source       = k_Light_VS;
-
-		ShaderDesc ltPSDesc;
-		ltPSDesc.stage  = ShaderStage::Fragment;
-		ltPSDesc.source = k_Light_PS;
-
-		ShaderHandle ltVS = engine.compileShader(ltVSDesc);
-		checkHandle(ltVS, "compileShader(ltVS) failed");
-		ShaderHandle ltPS = engine.compileShader(ltPSDesc);
-		checkHandle(ltPS, "compileShader(ltPS) failed");
+		ShaderHandle ltVS = loadShader("lighting.vs.hlsl", ShaderStage::Vertex);
+		ShaderHandle ltPS = loadShader("lighting.ps.hlsl", ShaderStage::Fragment);
 
 
 		// Shadow Pass VS (Position + Normal + UV レイアウト、PS なし)
-		ShaderDesc shadowVSDesc;
-		shadowVSDesc.stage        = ShaderStage::Vertex;
-		shadowVSDesc.source       = k_Shadow_VS;
-
-		ShaderHandle shadowVS = engine.compileShader(shadowVSDesc);
-		checkHandle(shadowVS, "compileShader(shadowVS) failed");
+		ShaderHandle shadowVS = loadShader("shadow.vs.hlsl", ShaderStage::Vertex);
 
 		// ---------------------------------------------------
 		//  パイプラインを事前作成する
@@ -676,10 +635,8 @@ int main()
 		checkHandle(gridVPBuf, "createBuffer(gridVPBuf) failed");
 
 		// Grid シェーダーをコンパイル
-		ShaderDesc gridVSDesc; gridVSDesc.stage = ShaderStage::Vertex;   gridVSDesc.source = k_Grid_VS;
-		ShaderDesc gridPSDesc; gridPSDesc.stage = ShaderStage::Fragment; gridPSDesc.source = k_Grid_PS;
-		ShaderHandle gridVS = engine.compileShader(gridVSDesc); checkHandle(gridVS, "compileShader(gridVS) failed");
-		ShaderHandle gridPS = engine.compileShader(gridPSDesc); checkHandle(gridPS, "compileShader(gridPS) failed");
+		ShaderHandle gridVS = loadShader("grid.vs.hlsl", ShaderStage::Vertex);
+		ShaderHandle gridPS = loadShader("grid.ps.hlsl", ShaderStage::Fragment);
 
 		// Grid パイプライン (LineList、バックバッファに直接描画、深度テストあり・書き込みなし)
 		GfxGraphicsPipelineDesc gridPipeDesc;
@@ -705,10 +662,8 @@ int main()
 		//  RT Composite パイプライン
 		//  UAV テクスチャをバックバッファにフルスクリーン描画する
 		// ---------------------------------------------------
-		ShaderDesc rtVSDesc; rtVSDesc.stage = ShaderStage::Vertex;   rtVSDesc.source = k_RTComposite_VS;
-		ShaderDesc rtPSDesc; rtPSDesc.stage = ShaderStage::Fragment; rtPSDesc.source = k_RTComposite_PS;
-		ShaderHandle rtCompVS = engine.compileShader(rtVSDesc); checkHandle(rtCompVS, "compileShader(rtCompVS) failed");
-		ShaderHandle rtCompPS = engine.compileShader(rtPSDesc); checkHandle(rtCompPS, "compileShader(rtCompPS) failed");
+		ShaderHandle rtCompVS = loadShader("rt_composite.vs.hlsl", ShaderStage::Vertex);
+		ShaderHandle rtCompPS = loadShader("rt_composite.ps.hlsl", ShaderStage::Fragment);
 
 		// v1 の GfxPipelineDesc のまま (DLL 内で v2 に変換される互換レイヤーの確認用)
 		GfxPipelineDesc rtCompPipeDesc;
@@ -753,11 +708,7 @@ int main()
 		checkHandle(gridDepthPipe, "createPipeline(gridDepthPipe) failed");
 
 		// 合成: 解決済みテクスチャ (t0) を Sampler テーブル (s0) で読み、乗算済みアルファで重ねる
-		static const std::string k_GridComposite_PS_src = loadShaderSource("grid_composite.ps.hlsl");
-		static const char*       k_GridComposite_PS     = k_GridComposite_PS_src.c_str();
-		ShaderDesc gcPSDesc; gcPSDesc.stage = ShaderStage::Fragment; gcPSDesc.source = k_GridComposite_PS;
-		ShaderHandle gridCompPS = engine.compileShader(gcPSDesc);
-		checkHandle(gridCompPS, "compileShader(gridCompPS) failed");
+		ShaderHandle gridCompPS = loadShader("grid_composite.ps.hlsl", ShaderStage::Fragment);
 
 		GfxBindingLayoutDesc gridCompLayoutDesc;
 		gridCompLayoutDesc
@@ -1003,6 +954,7 @@ int main()
 			ShaderDesc csDesc;
 			csDesc.stage  = ShaderStage::Compute;
 			csDesc.source = k_SmokeCS;
+			csDesc.sourceName = "smoke.cs.hlsl";
 			ShaderHandle smokeCS = engine.compileShader(csDesc);
 			checkHandle(smokeCS, "compileShader(smokeCS) failed");
 
@@ -1231,6 +1183,9 @@ int main()
 
 				std::cout << "[Engine] Resized to " << nw << "x" << nh << "\n";
 			}
+
+			// 保存された .hlsl があれば作り直す (失敗しても元のシェーダーで描画を続ける)
+			shaders.poll();
 
 			if (!win->acquireNextBuffer())
 				throw std::runtime_error("[Error] acquireNextBuffer failed at frame " + std::to_string(frame));
@@ -1665,7 +1620,6 @@ int main()
 		engine.destroyPipeline(gridDepthPipe);
 		engine.destroyPipeline(gridCompPipe);
 		engine.destroyBindingLayout(gridCompLayout);
-		engine.destroyShader(gridCompPS);
 		engine.destroySampler(pointBorderSampler);
 		engine.destroyQueryPool(occPool);
 		engine.destroyBuffer(gridArgsBuf);
@@ -1679,19 +1633,9 @@ int main()
 		engine.destroyBindingLayout(texLayout);
 		engine.destroyBindingLayout(lightLayout);
 		engine.destroyBindingLayout(vsCBLayout);
-		engine.destroyShader(vs);
-		engine.destroyShader(ps);
-		engine.destroyShader(gbVS);
-		engine.destroyShader(gbPS);
-		engine.destroyShader(ltVS);
-		engine.destroyShader(ltPS);
-		engine.destroyShader(shadowVS);
-		engine.destroyShader(gridVS);
-		engine.destroyShader(gridPS);
 		engine.destroyPipeline(gridPipe);
-		engine.destroyShader(rtCompVS);
-		engine.destroyShader(rtCompPS);
 		engine.destroyPipeline(rtCompPipe);
+		shaders.clear();   // ShaderLibrary で読み込んだシェーダー
 		engine.destroyBuffer(gridVB);
 		engine.destroyBuffer(gridVPBuf);
 		engine.destroyTexture(checkerTex);

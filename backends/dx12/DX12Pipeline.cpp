@@ -289,18 +289,84 @@ DX12PipelineImpl::DX12PipelineImpl()
 	m_iface.self   = this;
 }
 
+namespace
+{
+	void reportPipelineError(DX12DeviceImpl* dev, const char* name, const std::string& what)
+	{
+		const std::string text = "pipeline (" + std::string(name && *name ? name : "unnamed") + "): " + what;
+		dev->emitDebugMessage(GfxMessageSeverity::Error, GFX_MESSAGE_ID_PIPELINE, text.c_str());
+	}
+}
+
+void DX12PipelineImpl::keepDebugName(const char*& name)
+{
+	if (name)
+		m_debugName = name;
+	name = m_debugName.empty() ? nullptr : m_debugName.c_str();
+}
+
 bool DX12PipelineImpl::create(
 	DX12DeviceImpl*                dev,
 	const GfxGraphicsPipelineDesc& desc,
 	const DX12BindingLayoutRes&    layout)
 {
-	m_dev      = dev;
-	m_rootSig  = layout.rootSig;
-	m_slots    = layout.slots;
-	m_topology = static_cast<D3D_PRIMITIVE_TOPOLOGY>(desc.primitiveTopology);
+	m_dev = dev;
+	ComPtr<ID3D12PipelineState> pso = buildGraphicsPSO(dev, desc, layout.rootSig.Get());
+	if (!pso)
+		return false;
+	replace(desc, layout, std::move(pso));
+	return true;
+}
 
+ComPtr<ID3D12PipelineState> DX12PipelineImpl::replace(
+	const GfxGraphicsPipelineDesc& desc,
+	const DX12BindingLayoutRes&    layout,
+	ComPtr<ID3D12PipelineState>    pso)
+{
+	m_isCompute    = false;
+	m_rootSig      = layout.rootSig;
+	m_slots        = layout.slots;
+	m_topology     = static_cast<D3D_PRIMITIVE_TOPOLOGY>(desc.primitiveTopology);
+	m_graphicsDesc = desc;
+	keepDebugName(m_graphicsDesc.debugName);
+	return swapPSO(std::move(pso));
+}
+
+ComPtr<ID3D12PipelineState> DX12PipelineImpl::replace(
+	const GfxComputePipelineDesc& desc,
+	const DX12BindingLayoutRes&   layout,
+	ComPtr<ID3D12PipelineState>   pso)
+{
+	m_isCompute   = true;
+	m_rootSig     = layout.rootSig;
+	m_slots       = layout.slots;
+	m_computeDesc = desc;
+	keepDebugName(m_computeDesc.debugName);
+	return swapPSO(std::move(pso));
+}
+
+bool DX12PipelineImpl::usesShader(uint64_t id) const
+{
+	if (m_isCompute)
+		return m_computeDesc.cs.id == id;
+	const GfxGraphicsPipelineDesc& d = m_graphicsDesc;
+	return d.vs.id == id || d.ps.id == id || d.ds.id == id || d.hs.id == id || d.gs.id == id;
+}
+
+ComPtr<ID3D12PipelineState> DX12PipelineImpl::rebuildPSO() const
+{
+	return m_isCompute
+		? buildComputePSO (m_dev, m_computeDesc,  m_rootSig.Get())
+		: buildGraphicsPSO(m_dev, m_graphicsDesc, m_rootSig.Get());
+}
+
+ComPtr<ID3D12PipelineState> DX12PipelineImpl::buildGraphicsPSO(
+	DX12DeviceImpl*                dev,
+	const GfxGraphicsPipelineDesc& desc,
+	ID3D12RootSignature*           rootSig)
+{
 	D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-	psoDesc.pRootSignature = m_rootSig.Get();
+	psoDesc.pRootSignature = rootSig;
 
 	// シェーダー (VS は必須。PS は depth-only パスでは不要)
 	auto setShader = [&](ShaderHandle h, D3D12_SHADER_BYTECODE& out, const char* stage) -> bool
@@ -310,7 +376,7 @@ bool DX12PipelineImpl::create(
 		const DX12ShadRes* sh = dev->getShadRes(h.id);
 		if (!sh || sh->bytecode.empty())
 		{
-			fprintf(stderr, "[GfxEngine] createGraphicsPipeline: %s のシェーダーハンドルが無効です\n", stage);
+			reportPipelineError(dev, desc.debugName, std::string(stage) + " のシェーダーハンドルが無効です");
 			return false;
 		}
 		out = { sh->bytecode.data(), sh->bytecode.size() };
@@ -318,13 +384,13 @@ bool DX12PipelineImpl::create(
 	};
 	if (!desc.vs.valid())
 	{
-		fprintf(stderr, "[GfxEngine] createGraphicsPipeline: VS は必須です\n");
-		return false;
+		reportPipelineError(dev, desc.debugName, "VS は必須です");
+		return nullptr;
 	}
 	if (!setShader(desc.vs, psoDesc.VS, "VS") || !setShader(desc.ps, psoDesc.PS, "PS")
 	 || !setShader(desc.ds, psoDesc.DS, "DS") || !setShader(desc.hs, psoDesc.HS, "HS")
 	 || !setShader(desc.gs, psoDesc.GS, "GS"))
-		return false;
+		return nullptr;
 
 	// BlendState
 	psoDesc.BlendState.AlphaToCoverageEnable  = desc.blendState.alphaToCoverageEnable  ? TRUE : FALSE;
@@ -414,14 +480,14 @@ bool DX12PipelineImpl::create(
 	psoDesc.NodeMask   = desc.nodeMask;
 	psoDesc.Flags      = static_cast<D3D12_PIPELINE_STATE_FLAGS>(desc.flags);
 
-	if (FAILED(dev->device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&m_pso))))
+	ComPtr<ID3D12PipelineState> pso;
+	if (FAILED(dev->device()->CreateGraphicsPipelineState(&psoDesc, IID_PPV_ARGS(&pso))))
 	{
-		fprintf(stderr, "[GfxEngine] createGraphicsPipeline: CreateGraphicsPipelineState に失敗しました (%s)\n",
-			desc.debugName ? desc.debugName : "unnamed");
-		return false;
+		reportPipelineError(dev, desc.debugName, "CreateGraphicsPipelineState に失敗しました (シェーダーのシグネチャ / フォーマット / ステートの組み合わせを確認してください)");
+		return nullptr;
 	}
-	setDebugName(m_pso.Get(), desc.debugName);
-	return true;
+	setDebugName(pso.Get(), desc.debugName);
+	return pso;
 }
 
 // v2: GfxGraphicsPipelineDesc から PSO を作成し IPipeline* を PipelineHandle に格納して返す
@@ -452,7 +518,9 @@ PipelineHandle DX12DeviceImpl::createGraphicsPipeline(const GfxGraphicsPipelineD
 
 	// PipelineHandle.id に IPipeline* (impl が所有するラッパー) を直接格納する
 	// bindPipeline が IPipeline* を直接受け取る設計と整合する
-	return PipelineHandle{ reinterpret_cast<uint64_t>(impl->iface()) };
+	const PipelineHandle h{ reinterpret_cast<uint64_t>(impl->iface()) };
+	m_pipelines.emplace(h.id, impl);
+	return h;
 }
 
 // v1 互換: GfxPipelineDesc を v2 (バインディングレイアウト + パイプライン) に変換して作成する
@@ -497,6 +565,7 @@ void DX12DeviceImpl::destroyPipeline(PipelineHandle h)
 void DX12DeviceImpl::destroyPipelineImpl(DX12PipelineImpl* impl)
 {
 	if (!impl) return;
+	m_pipelines.erase(reinterpret_cast<uint64_t>(impl->iface()));
 	deferRelease(impl->takePSO());
 	deferRelease(impl->takeRootSig());
 	delete impl;

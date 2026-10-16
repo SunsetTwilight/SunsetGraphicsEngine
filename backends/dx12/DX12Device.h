@@ -83,6 +83,14 @@ public:
 	// ---- ABI 7: シェーダーのリフレクション ----
 	bool     getShaderReflection  (ShaderHandle h, GfxShaderReflection* out);
 	uint32_t getShaderDependencies(ShaderHandle h, char* buffer, uint32_t bufferSize);
+
+	// ---- ABI 7: シェーダー / パイプラインの作り直し (DX12Reload.cpp) ----
+	bool updateShader          (ShaderHandle h, const GfxShaderDesc* desc);
+	bool updateGraphicsPipeline(PipelineHandle h, const GfxGraphicsPipelineDesc* desc);
+	bool updateComputePipeline (PipelineHandle h, const GfxComputePipelineDesc* desc);
+	bool getGraphicsPipelineDesc(PipelineHandle h, GfxGraphicsPipelineDesc* out) const;
+	bool getComputePipelineDesc (PipelineHandle h, GfxComputePipelineDesc* out) const;
+	DX12PipelineImpl* findPipeline(PipelineHandle h) const;
 	bool          checkSampleCount     (DXGI_FORMAT fmt, uint32_t count, uint32_t quality, const char* fn);
 	bool          uploadSubresource0   (ID3D12Resource* res, DXGI_FORMAT fmt, uint32_t width, uint32_t height,
 	                                    const void* data, uint32_t rowPitch, D3D12_RESOURCE_STATES finalState);
@@ -377,6 +385,7 @@ public:
 	std::unordered_map<uint64_t, DX12BindingLayoutRes> m_bindingLayouts;
 	std::unordered_map<uint64_t, DX12QueryPoolRes>     m_queryPools;
 	std::unordered_map<uint64_t, DX12ViewRes>          m_views;
+	std::unordered_map<uint64_t, DX12PipelineImpl*>    m_pipelines;   // PipelineHandle.id → 実装 (所有はしない)
 	uint64_t m_nextId = 1;
 
 	// CommandBuffer プール: {フェンス値, CB} のペアで GPU 完了後に再利用する

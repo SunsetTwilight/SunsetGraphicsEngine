@@ -220,6 +220,51 @@ ABI v2 の記述子 (`GfxGraphicsPipelineDesc` / `GfxBindingLayoutDesc`) は先�
 `GfxPipelineDesc` (v1) は互換レイヤーとして残してあり、DLL 内で v2 に変換されます。
 `GFX_EXAMPLE_DUMP_SCHEMA=1` でサンプルを実行すると、スキーマ経由で記述子の中身を出力します。
 
+### シェーダー
+
+- HLSL は DXC で DXIL にコンパイルします (上の「DXC の指定」)。`ShaderDesc::sourceName` にファイルのパスを渡すと、
+  エラーメッセージにファイル名が出て、相対パスの `#include` もそのファイルのフォルダから探します。
+- `GraphicsEngine::getShaderReflection` で、バインディング、定数バッファのレイアウト、入出力シグネチャを取得できます
+  (`GfxShaderReflection` は約 35 KB あるので、ヒープに置いてください)。
+- `GraphicsEngine::updateShader` / `updatePipeline` は、ハンドルを変えずに中身を作り直します。
+  全部作れたときだけ入れ替わり、失敗したら元のまま (理由はデバッグメッセージ) です。
+  記録中のコマンドバッファでバインド済みのパイプラインを、その記録中に更新しないでください。
+
+ホットリロードは `gfx/core/ShaderLibrary.h` (ヘッダーのみ) を使います。
+
+```cpp
+ShaderLibrary shaders(engine);
+shaders.addSearchPath("shaders");
+ShaderHandle ps = shaders.load("lighting.ps.hlsl", ShaderStage::Fragment);
+// フレームループ
+shaders.poll();   // 保存された .hlsl (と #include したファイル) を作り直す。パイプラインも作り直される
+```
+
+サンプル (`GfxExample`) は、ビルドツリーで実行するとソースの `samples/deferred/shaders/` を直接読みます。
+実行中に `.hlsl` を保存すると、その場で反映されます (`[HotReload]` の行が出ます)。
+
+### 記述子と JSON
+
+`gfx/schema/GfxJson.h` (ヘッダーのみ、外部依存なし) で、記述子と JSON を相互に変換できます。
+
+```cpp
+#include "gfx/schema/GfxJson.h"
+
+std::string text = gfxJsonStringify(gfxToJson(pipelineDesc));   // 既定値と同じフィールドは省く
+
+GfxJson json;
+std::string error;
+if (gfxJsonParse(text, json, &error))
+{
+    GfxGraphicsPipelineDesc desc;
+    GfxJsonDiagnostics diag;   // エラーと警告 (フィールドのパス付き)
+    if (gfxFromJson(json, desc, &diag)) { /* ... */ }
+}
+```
+
+ハンドル (シェーダーなど) は実行時の値なので、既定では書き出しません。アセットの名前などに置き換えるときは
+`GfxJsonWriteOptions::writeHandle` / `GfxJsonReadOptions::readHandle` を使います。
+
 サンプルは 60 フレームごとに `[GPU   N]` の行で、パスごとの GPU 時間 (タイムスタンプのクエリ) と G-Buffer のオクルージョンクエリの結果を出力します。
 
 ---

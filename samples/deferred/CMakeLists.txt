@@ -26,6 +26,9 @@ add_custom_target(GfxExample_shaders ALL
     VERBATIM
 )
 add_dependencies(GfxExample GfxExample_shaders)
+# ホットリロード: ビルドツリーの exe はソースの shaders/ を直接読む (install した exe は bin/shaders/ を使う)
+target_compile_definitions(GfxExample PRIVATE
+    "GFX_SAMPLE_SHADER_SOURCE_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/shaders\"")
 install(DIRECTORY shaders DESTINATION "${CMAKE_INSTALL_BINDIR}")
 
 # 外部のアプリと同じく、名前空間付きのターゲットだけを使う

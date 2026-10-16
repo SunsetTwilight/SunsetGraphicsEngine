@@ -38,3 +38,17 @@ std::string loadShaderSource(const char* name)
 	ss << in.rdbuf();
 	return ss.str();
 }
+
+std::vector<fs::path> shaderSearchPaths()
+{
+	std::vector<fs::path> dirs;
+#ifdef GFX_SAMPLE_SHADER_SOURCE_DIR
+	std::error_code ec;
+	const std::string utf8   = GFX_SAMPLE_SHADER_SOURCE_DIR;   // CMake のパス (UTF-8)
+	const fs::path    source = fs::path(std::u8string(utf8.begin(), utf8.end()));
+	if (fs::is_directory(source, ec))
+		dirs.push_back(source);
+#endif
+	dirs.push_back(executableDir() / "shaders");
+	return dirs;
+}

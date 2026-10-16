@@ -62,7 +62,11 @@ void DX12DeviceImpl::emitDebugMessage(GfxMessageSeverity severity, int32_t id, c
 	}
 	static const char* k_sev[] = { "CORRUPTION", "ERROR", "WARNING", "INFO" };
 	const uint32_t s = static_cast<uint32_t>(severity);
-	fprintf(stderr, "[D3D12 %s #%d] %s\n", s < 4 ? k_sev[s] : "?", static_cast<int>(id), text);
+	// 負の id はエンジン自身のメッセージ (GFX_MESSAGE_ID_*)、0 以上はデバッグレイヤーのメッセージ
+	if (id < 0)
+		fprintf(stderr, "[GfxEngine %s] %s\n", s < 4 ? k_sev[s] : "?", text);
+	else
+		fprintf(stderr, "[D3D12 %s #%d] %s\n", s < 4 ? k_sev[s] : "?", static_cast<int>(id), text);
 }
 
 // デバイス / コマンドキューを作成する
@@ -1121,6 +1125,7 @@ void DX12DeviceImpl::shutdown()
 	m_bindingLayouts.clear();
 	m_queryPools.clear();
 	m_views.clear();
+	m_pipelines.clear();   // 実装はアプリが destroyPipeline で破棄する (ここでは対応表だけを消す)
 	m_drawSig.Reset();
 	m_drawIndexedSig.Reset();
 	m_dispatchSig.Reset();
@@ -1293,31 +1298,44 @@ bool DX12PipelineImpl::createCompute(
 	const GfxComputePipelineDesc& desc,
 	const DX12BindingLayoutRes&   layout)
 {
-	m_dev       = dev;
-	m_rootSig   = layout.rootSig;
-	m_slots     = layout.slots;
-	m_isCompute = true;
+	m_dev = dev;
+	ComPtr<ID3D12PipelineState> pso = buildComputePSO(dev, desc, layout.rootSig.Get());
+	if (!pso)
+		return false;
+	replace(desc, layout, std::move(pso));
+	return true;
+}
 
+ComPtr<ID3D12PipelineState> DX12PipelineImpl::buildComputePSO(
+	DX12DeviceImpl*               dev,
+	const GfxComputePipelineDesc& desc,
+	ID3D12RootSignature*          rootSig)
+{
+	auto report = [&](const char* what)
+	{
+		const std::string text = "pipeline (" + std::string(desc.debugName ? desc.debugName : "unnamed") + "): " + what;
+		dev->emitDebugMessage(GfxMessageSeverity::Error, GFX_MESSAGE_ID_PIPELINE, text.c_str());
+	};
 	const DX12ShadRes* cs = desc.cs.valid() ? dev->getShadRes(desc.cs.id) : nullptr;
 	if (!cs || cs->bytecode.empty() || cs->stage != ShaderStage::Compute)
 	{
-		fprintf(stderr, "[GfxEngine] createComputePipeline: CS が無効です (%s)\n", desc.debugName ? desc.debugName : "unnamed");
-		return false;
+		report("CS が無効です");
+		return nullptr;
 	}
 
 	D3D12_COMPUTE_PIPELINE_STATE_DESC pd = {};
-	pd.pRootSignature = m_rootSig.Get();
+	pd.pRootSignature = rootSig;
 	pd.CS             = { cs->bytecode.data(), cs->bytecode.size() };
 	pd.NodeMask       = desc.nodeMask;
 	pd.Flags          = static_cast<D3D12_PIPELINE_STATE_FLAGS>(desc.flags);
-	if (FAILED(dev->device()->CreateComputePipelineState(&pd, IID_PPV_ARGS(&m_pso))))
+	ComPtr<ID3D12PipelineState> pso;
+	if (FAILED(dev->device()->CreateComputePipelineState(&pd, IID_PPV_ARGS(&pso))))
 	{
-		fprintf(stderr, "[GfxEngine] createComputePipeline: CreateComputePipelineState に失敗しました (%s)\n",
-			desc.debugName ? desc.debugName : "unnamed");
-		return false;
+		report("CreateComputePipelineState に失敗しました");
+		return nullptr;
 	}
-	setDebugName(m_pso.Get(), desc.debugName);
-	return true;
+	setDebugName(pso.Get(), desc.debugName);
+	return pso;
 }
 
 PipelineHandle DX12DeviceImpl::createComputePipeline(const GfxComputePipelineDesc* src)
@@ -1340,7 +1358,9 @@ PipelineHandle DX12DeviceImpl::createComputePipeline(const GfxComputePipelineDes
 		delete impl;
 		return {};
 	}
-	return PipelineHandle{ reinterpret_cast<uint64_t>(impl->iface()) };
+	const PipelineHandle h{ reinterpret_cast<uint64_t>(impl->iface()) };
+	m_pipelines.emplace(h.id, impl);
+	return h;
 }
 
 QueryPoolHandle DX12DeviceImpl::createQueryPool(const GfxQueryPoolDesc* src)

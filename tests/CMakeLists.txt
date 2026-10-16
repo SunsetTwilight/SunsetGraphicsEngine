@@ -39,9 +39,10 @@ add_executable(gfx_tests_render
     TestCommon.h
     test_render.cpp
     test_shader.cpp     # DXC / リフレクション / #include
+    test_reload.cpp     # シェーダー / パイプラインの作り直し、JSON からの作成、ShaderLibrary
 )
 target_link_libraries(gfx_tests_render PRIVATE
-    SunsetGraphicsEngine::core gfx_doctest gfx_options)
+    SunsetGraphicsEngine::core SunsetGraphicsEngine::schema gfx_doctest gfx_options)
 sunset_gfx_deploy_runtime(gfx_tests_render)
 add_test(NAME render COMMAND gfx_tests_render)
 set_tests_properties(render PROPERTIES LABELS "gpu")
