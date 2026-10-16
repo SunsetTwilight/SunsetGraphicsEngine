@@ -10,7 +10,23 @@
 #    d3d12.lib / dxgi.lib / dxguid.lib / d3dcompiler.lib
 # ============================================================
 add_library(gfx_dx12 SHARED
-    DX12Backend.cpp
+    # 宣言 (DX12Device.h がすべてを include する)
+    DX12Common.h          # 共通の include と前方宣言
+    DX12Utils.h           # フォーマット変換と小さなヘルパー
+    DX12Descriptors.h     # ディスクリプタヒープと一時リング
+    DX12CommandBuffer.h
+    DX12Resources.h       # RenderTarget / DepthStencil とリソースの補助構造体
+    DX12SwapChain.h
+    DX12Pipeline.h
+    DX12Device.h
+    # 実装
+    DX12Export.cpp        # vtable と DLL のエクスポート関数
+    DX12Device.cpp        # 初期化 / submit / 遅延解放 / ディスクリプタ / バッファ / Compute / クエリ
+    DX12Pipeline.cpp      # グラフィックスパイプラインとバインディングレイアウト
+    DX12Raytracing.cpp    # BLAS / TLAS / RT パイプライン
+    DX12CommandBuffer.cpp # コマンドの記録と状態追跡
+    DX12Resources.cpp     # テクスチャ / ビュー / サンプラー、RT / DS
+    DX12SwapChain.cpp
 )
 
 target_link_libraries(gfx_dx12 PRIVATE
