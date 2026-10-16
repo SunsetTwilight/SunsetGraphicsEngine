@@ -1,0 +1,140 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 22, "patch": 0 },
+
+  "configurePresets": [
+
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "installDir": "${sourceDir}/install/${presetName}",
+      "cacheVariables": {
+        "GFX_BUILD_EXAMPLE": "ON",
+        "GFX_DXC_DIR": "C:/dxc_2025_05_24"
+      }
+    },
+
+    {
+      "name": "windows-debug",
+      "displayName": "Windows — Debug (Ninja)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "Debug",
+        "GFX_BUILD_DX12":        "ON",
+        "GFX_BUILD_VULKAN":      "OFF",
+        "GFX_ENABLE_VALIDATION": "ON"
+      }
+    },
+
+    {
+      "name": "windows-release",
+      "displayName": "Windows — Release (Ninja)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "Release",
+        "GFX_BUILD_DX12":        "ON",
+        "GFX_BUILD_VULKAN":      "OFF",
+        "GFX_ENABLE_VALIDATION": "OFF"
+      }
+    },
+
+    {
+      "name": "windows-vs2022",
+      "displayName": "Windows — Visual Studio 2022 (x64)",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/vs2022",
+      "installDir": "${sourceDir}/install/vs2022",
+      "cacheVariables": {
+        "GFX_BUILD_DX12":        "ON",
+        "GFX_BUILD_VULKAN":      "OFF",
+        "GFX_ENABLE_VALIDATION": "OFF",
+        "GFX_BUILD_EXAMPLE":     "ON",
+        "GFX_DXC_DIR":           "C:/dxc_2025_05_24"
+      }
+    },
+
+    {
+      "name": "windows-vs2022-validation",
+      "displayName": "Windows — Visual Studio 2022 (x64) + Validation",
+      "inherits": "windows-vs2022",
+      "cacheVariables": {
+        "GFX_ENABLE_VALIDATION": "ON"
+      }
+    },
+
+    {
+      "name": "linux-debug",
+      "displayName": "Linux — Debug (Ninja)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "Debug",
+        "GFX_BUILD_DX12":        "OFF",
+        "GFX_BUILD_VULKAN":      "ON",
+        "GFX_ENABLE_VALIDATION": "ON"
+      }
+    },
+
+    {
+      "name": "linux-release",
+      "displayName": "Linux — Release (Ninja)",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE":      "Release",
+        "GFX_BUILD_DX12":        "OFF",
+        "GFX_BUILD_VULKAN":      "ON",
+        "GFX_ENABLE_VALIDATION": "OFF"
+      }
+    }
+
+  ],
+
+  "buildPresets": [
+    { "name": "windows-debug",   "configurePreset": "windows-debug"   },
+    { "name": "windows-release", "configurePreset": "windows-release" },
+    {
+      "name": "windows-vs2022-debug",
+      "configurePreset": "windows-vs2022",
+      "configuration": "Debug"
+    },
+    {
+      "name": "windows-vs2022-release",
+      "configurePreset": "windows-vs2022",
+      "configuration": "Release"
+    },
+    { "name": "linux-debug",   "configurePreset": "linux-debug"   },
+    { "name": "linux-release", "configurePreset": "linux-release" }
+  ],
+
+  "testPresets": [
+    { "name": "windows-debug", "configurePreset": "windows-debug" },
+    { "name": "linux-debug",   "configurePreset": "linux-debug"   }
+  ]
+}

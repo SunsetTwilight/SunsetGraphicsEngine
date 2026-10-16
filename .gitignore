@@ -1,0 +1,15 @@
+# ビルド成果物
+/build/
+/install/
+/out/
+
+# IDE
+/.vs/
+/.vscode/
+*.user
+
+# 個人用の Claude Code 設定
+/.claude/settings.local.json
+
+# 実行時に生成されるログ
+frame_log.csv
