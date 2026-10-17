@@ -28,7 +28,7 @@ jobs:
         config: [ Debug, Release ]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install D3D12 debug layer (Graphics Tools)
         if: matrix.config == 'Debug'
