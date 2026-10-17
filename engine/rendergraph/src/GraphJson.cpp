@@ -411,6 +411,12 @@ GfxJson graphToJson(const GraphDesc& g)
 		passes.push(std::move(j));
 	}
 	root.set("passes", std::move(passes));
+	if (!g.editor.empty())
+	{
+		GfxJson editor;
+		if (gfxJsonParse(g.editor, editor) && editor.isObject())
+			root.set("editor", std::move(editor));
+	}
 	return root;
 }
 
@@ -872,7 +878,12 @@ bool graphFromJson(const GfxJson& json, GraphDesc& out, GfxJsonDiagnostics* diag
 		r.error("(root)", "グラフの JSON はオブジェクトです");
 		return false;
 	}
-	r.checkKeys(json, "(root)", { "version", "parameters", "resources", "passes" });
+	r.checkKeys(json, "(root)", { "version", "parameters", "resources", "passes", "editor" });
+	if (const GfxJson* editor = json.find("editor"))
+	{
+		if (!editor->isObject()) r.error("editor", "オブジェクトが必要です");
+		else out.editor = gfxJsonStringify(*editor, 0);
+	}
 	r.integerKey(json, "version", "(root)", 1, 1000000, out.version);
 	if (out.version > 1)
 		r.warning("version", "新しい形式 (version " + std::to_string(out.version) + ") のグラフです。知らない項目は無視します");

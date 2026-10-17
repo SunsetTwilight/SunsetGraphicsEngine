@@ -298,6 +298,8 @@ struct GraphDesc
 	std::vector<Parameter>    parameters;
 	std::vector<ResourceDesc> resources;
 	std::vector<PassDesc>     passes;
+	// エディターの情報 (ノードの位置など) の JSON (オブジェクト)。エンジンは使わず、読み書きで保つだけ。空ならなし
+	std::string               editor;
 
 	const ResourceDesc* findResource(const std::string& name) const
 	{

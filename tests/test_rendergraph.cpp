@@ -132,6 +132,27 @@ TEST_CASE("レンダーグラフ: JSON を読み、書き出して読み直す�
 	CHECK(graphToString(again) == text);   // 書き出しは安定している
 }
 
+TEST_CASE("レンダーグラフ: editor の項目 (ノードの位置など) を読み書きで保つ")
+{
+	const char* text = R"json({ "resources": {}, "passes": [],
+	  "editor": { "nodes": { "pass:GBuffer": [ 10, 20 ] }, "zoom": 1.5 } })json";
+	GraphDesc g;
+	GfxJsonDiagnostics diag;
+	REQUIRE(graphFromString(text, g, &diag));
+	CHECK(diag.warnings.empty());
+	REQUIRE_FALSE(g.editor.empty());
+	GraphDesc again;
+	REQUIRE(graphFromString(graphToString(g), again));
+	CHECK(again.editor == g.editor);
+	CHECK(graphToString(again).find("\"pass:GBuffer\"") != std::string::npos);
+
+	// オブジェクトでなければエラー
+	const char* bad = R"json({ "editor": 3 })json";
+	GraphDesc b;
+	GfxJsonDiagnostics d2;
+	CHECK_FALSE(graphFromString(bad, b, &d2));
+}
+
 TEST_CASE("レンダーグラフ: JSON の型の違いはエラー、知らないキーは警告 (パス付き)")
 {
 	const char* bad = R"json({
