@@ -254,27 +254,26 @@ void DX12SwapChainImpl::present()
 }
 
 // GPU の完了を待機する
-// GPU の全コマンド完了を待機し、全バッファのフェンス値を統一する
+// これまでに積んだコマンドがすべて終わるまで待つ。
+// Signal の値は必ず単調に増やす (前に Signal した値以下だと、まだ終わっていないのに完了済みと判定される)
 void DX12SwapChainImpl::waitForGPU()
 {
-	// 現在のフェンス値より大きい値で Signal して全コマンド完了を待つ
-	const uint64_t signal = ++m_fenceValues[m_frameIndex];
+	const uint64_t signal = ++m_fenceCounter;
 	m_dev->cmdQueue()->Signal(m_fence.Get(), signal);
-	m_fence->SetEventOnCompletion(signal, m_fenceEvent);
-	WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
-
-	// 全バッファのフェンス値を完了済みの値に揃える
-	// これにより次の acquireNextBuffer で待機が発生しなくなる
-	for (uint32_t i = 0; i < m_bufferCount; ++i)
-		m_fenceValues[i] = signal;
+	if (m_fence->GetCompletedValue() < signal)
+	{
+		m_fence->SetEventOnCompletion(signal, m_fenceEvent);
+		WaitForSingleObjectEx(m_fenceEvent, INFINITE, FALSE);
+	}
+	// どのバックバッファも、これで完了済みになっている (m_fenceValues[i] <= signal)
 }
 
 // 次フレームへ進む
 void DX12SwapChainImpl::moveToNextFrame()
 {
-	// 現フレームの描画完了を GPU に通知する
-	// フェンス値をインクリメントして Signal する
-	const uint64_t signalValue = ++m_fenceValues[m_frameIndex];
+	// 現フレームの描画完了を GPU に通知する (このバックバッファはこの値の完了で再利用できる)
+	const uint64_t signalValue = ++m_fenceCounter;
+	m_fenceValues[m_frameIndex] = signalValue;
 	m_dev->cmdQueue()->Signal(m_fence.Get(), signalValue);
 
 	// バックバッファ index を次フレームへ進める

@@ -58,7 +58,8 @@ private:
 
 	// フレーム同期
 	ComPtr<ID3D12Fence> m_fence;
-	uint64_t            m_fenceValues[MAX_BUFFERS] = {};
+	uint64_t            m_fenceValues[MAX_BUFFERS] = {};   // 各バックバッファを最後に使ったフレームの Signal 値
+	uint64_t            m_fenceCounter = 0;                // 最後に Signal した値 (単調に増やす)
 	HANDLE              m_fenceEvent  = nullptr;
 	uint32_t            m_frameIndex  = 0;
 	uint32_t            m_bufferCount = 2;
