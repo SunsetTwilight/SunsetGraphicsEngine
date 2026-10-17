@@ -34,12 +34,14 @@ SunsetGraphicsEngine/
 │   │     Types / PipelineState / Commands / Resources / Compat / Interfaces / Device / Plugin .h
 │   ├── schema/include/gfx/schema/  ← v2 記述子のメタデータ表 (gfx_schema、ヘッダーのみ)
 │   ├── core/                       ← 本体 SunsetGraphicsEngine.dll (C ABI) と C++ ラッパー
-│   └── rendergraph/                ← Phase 3 (未実装)
+│   └── rendergraph/                ← レンダーグラフ (データ、コンパイル、PipelineLibrary、Executor)
 ├── backends/
 │   ├── dx12/                       ← gfx_dx12.dll (責務ごとに分割: Device / CommandBuffer / Resources / ...)
 │   └── vulkan/                     ← gfx_vulkan (現在はビルド対象外)
 ├── samples/deferred/               ← GfxExample (ディファードレンダリングのサンプル)
 │   └── shaders/                    ←   HLSL (ビルド時に bin/shaders/ にコピー)
+├── samples/rendergraph/            ← GfxGraphSample (同じ流れをレンダーグラフの JSON で描くサンプル)
+│   └── assets/                     ←   graphs/ pipelines/ shaders/
 ├── shaders/                        ← 共有 HLSL (未使用)
 ├── assets/                         ← レンダーグラフ / パイプラインの JSON (Phase 3 以降)
 ├── tests/                          ← 自動テスト (未実装)
@@ -248,7 +250,9 @@ shaders.poll();   // 保存された .hlsl (と #include したファイル) を
 `SunsetGraphicsEngine::rendergraph` (C++ の静的ライブラリ、`#include "gfx/rendergraph/RenderGraph.h"`) に、
 描画の手順をデータ (グラフ) で表すレンダーグラフを作っています。M3a では、グラフのデータ、
 グラフのアセット (JSON) との相互変換、コンパイル (順序、使われないパスの除外、リソースの寿命、バリア、
-シェーダーとのつなぎ方の検証) ができます。実行 (GPU) は M3b で入ります。
+シェーダーとのつなぎ方の検証) ができます。M3b で、パイプラインのアセット (`PipelineLibrary`) とグラフの実行
+(`Executor`。一時リソース、バリア、パスごとの GPU 時間) が入りました。`GfxGraphSample` は、
+`samples/rendergraph/assets/` の JSON と HLSL だけでディファード (G-Buffer → ライティング → 合成) を描きます。
 詳しくは [engine/rendergraph/README.md](engine/rendergraph/README.md) を参照してください。
 
 ### 記述子と JSON
@@ -291,7 +295,7 @@ GitHub Actions (`.github/workflows/ci.yml`) で、push と pull request のた�
 
 ## 動作確認 (サンプルの自動テスト)
 
-`GfxExample` は、環境変数で自動テスト用の動作に切り替えられます。
+`GfxExample` と `GfxGraphSample` は、環境変数で自動テスト用の動作に切り替えられます。
 
 | 環境変数 | 内容 |
 |---------|------|
@@ -304,6 +308,7 @@ GitHub Actions (`.github/workflows/ci.yml`) で、push と pull request のた�
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools/check-sample.ps1 -BinDir build/windows-debug/bin
+powershell -ExecutionPolicy Bypass -File tools/check-sample.ps1 -BinDir build/windows-debug/bin -Sample GfxGraphSample
 ```
 
 ---

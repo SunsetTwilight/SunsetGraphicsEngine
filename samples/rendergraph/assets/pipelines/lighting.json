@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "type": "graphics",
+  "shaders": {
+    "vs": { "file": "shaders/fullscreen.vs.hlsl" },
+    "ps": { "file": "shaders/lighting.ps.hlsl" }
+  },
+  "layout": {
+    "parameters": [
+      { "parameterType": "CBV", "shaderRegister": 1 },
+      { "parameterType": "DescriptorTable", "shaderVisibility": "Pixel", "firstRange": 0, "numRanges": 1 }
+    ],
+    "numParameters": 2,
+    "ranges": [
+      { "rangeType": "SRV", "numDescriptors": 3, "baseShaderRegister": 0, "flags": [ "DescriptorsVolatile" ] }
+    ],
+    "numRanges": 1
+  },
+  "state": {
+    "rasterizerState": { "cullMode": "None" },
+    "depthStencilState": { "depthEnable": false, "depthWriteMask": "Zero" }
+  }
+}

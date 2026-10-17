@@ -3,7 +3,7 @@
 #
 #  レンダーグラフ。設計: docs/design/editor-architecture.md の「Phase 3」「M3 の詳細設計」
 #    M3a: グラフのデータ (GraphDesc)、JSON との相互変換 (GraphJson)、コンパイル (Compiler)。GPU を使わない
-#    M3b 以降: アセットの読み込み (AssetLibrary)、実行 (Executor)
+#    M3b: パイプラインのアセット (PipelineLibrary)、実行 (Executor)。エンジン本体 (core) を使う
 #
 #  エンジンの公開 API だけを使う (バックエンドは参照しない)。C++ の型を使うので、
 #  アプリと同じコンパイラ / 構成 (Debug / Release) でビルドしたものをリンクすること。
@@ -14,8 +14,12 @@ add_library(gfx_rendergraph STATIC
     include/gfx/rendergraph/GraphDesc.h     # グラフのデータ
     include/gfx/rendergraph/GraphJson.h     # JSON との相互変換
     include/gfx/rendergraph/Compiler.h      # コンパイル (順序 / カリング / 寿命 / バリア / bind の検証)
+    include/gfx/rendergraph/PipelineLibrary.h  # パイプラインのアセット (pipelines/*.json) の読み込みと再利用
+    include/gfx/rendergraph/Executor.h      # 実行 (一時リソース、バリア、パスの記録、GPU 時間)
     src/GraphJson.cpp
     src/Compiler.cpp
+    src/PipelineLibrary.cpp
+    src/Executor.cpp
 )
 add_library(gfx::rendergraph ALIAS gfx_rendergraph)
 add_library(SunsetGraphicsEngine::rendergraph ALIAS gfx_rendergraph)
@@ -27,7 +31,7 @@ target_include_directories(gfx_rendergraph PUBLIC
 )
 target_compile_features(gfx_rendergraph PUBLIC cxx_std_20)
 target_link_libraries(gfx_rendergraph
-    PUBLIC  gfx_schema
+    PUBLIC  gfx_schema gfx_core   # core は PipelineLibrary / Executor だけが使う (データとコンパイルだけなら DLL は不要)
     PRIVATE $<BUILD_INTERFACE:gfx_options>   # 警告の設定はこのライブラリのビルドにだけ使う (export しない)
 )
 

@@ -420,7 +420,7 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 |------|------|-----|
 | `GraphDesc` | グラフのデータ。JSON と相互に変換する (M1 の `GfxJson` を使う) | 不要 |
 | `compile()` | 順序 (トポロジカルソートと `order`)、カリング、寿命の解析、バリアの計画、`bind` の検証 | 不要 (単体テストできる) |
-| `AssetLibrary` | パイプライン / シェーダーのアセットを読み込み、作成済みのものを再利用する。ファイルの変更で作り直す (`ShaderLibrary` を使う) | 必要 |
+| `PipelineLibrary` | パイプライン / シェーダーのアセットを読み込み、作成済みのものを再利用する。ファイルの変更で作り直す (`ShaderLibrary` を使う)。3D モデルやテクスチャは扱わない (後で別のリポジトリ SunsetAssets にする) | 必要 |
 | `Executor` | 一時リソースのプール (大きさとフォーマットで再利用)、バリアの発行、パスの記録、パスごとのタイムスタンプ | 必要 |
 | `IDrawListProvider` | アプリが実装する。`draw(query, ctx)` で描画を記録し、`constants(name)` で定数バッファを返す | — |
 
@@ -429,11 +429,44 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 | 段階 | 場所 | 内容 | 完了条件 |
 |------|------|------|---------|
 | **M3a** コア | エンジン | `GraphDesc`、`compile()`。上の「表せる描画の流れ」の項目 (RayTrace / Subgraph / queue を除く) | GPU を使わない単体テストで、順序、カリング、寿命、バリアの計画、`bind` の検証が正しい。カスケードシャドウ、ブルームの mip の連鎖、TAA の履歴、Forward+、MSAA の解決、間接 dispatch、条件付きのパスの例がコンパイルできる |
-| **M3b** 実行 | エンジン | `AssetLibrary`、`Executor` (Raster / Fullscreen / Compute)、パスごとの GPU 時間 (M2d) | サンプルのディファード (G-Buffer → ライティング → 合成) をグラフで描け、D3D12 のメッセージが 0 件 |
+| **M3b** 実行 | エンジン | `PipelineLibrary`、`Executor` (Raster / Fullscreen / Compute)、パスごとの GPU 時間 (M2d) | サンプルのディファード (G-Buffer → ライティング → 合成) をグラフで描け、D3D12 のメッセージが 0 件 |
 | **M3c** 保存とホットリロード | エンジン | グラフとパイプラインのアセットの JSON の読み書き、ファイルの変更での作り直し | JSON を編集すると、サンプルの描画がその場で変わる |
 | **M3d** エディター | Studio | ビューポートをグラフで描く。アウトライナーにパスの一覧と GPU 時間、インスペクターでパスのパイプラインとつなぎ方を編集する | エディターで G-Buffer の構成や合成のブレンドを変え、すぐ反映される |
 
 ノードエディター (React Flow でグラフを線でつないで編集する UI) は M4。
+
+#### パイプラインのアセット (2026-10-17 決定)
+
+`PipelineLibrary` が読む `pipelines/*.json` の形。`layout` と `state` は M1 の記述子の JSON (`gfxToJson`) と同じ。
+
+```json
+{
+  "version": 1,
+  "type": "graphics",
+  "shaders": {
+    "vs": { "file": "shaders/gbuffer.vs.hlsl" },
+    "ps": { "file": "shaders/gbuffer.ps.hlsl", "entry": "main", "profile": "ps_6_0", "defines": { "NAME": "1" } }
+  },
+  "layout": { "parameters": [ { "parameterType": "CBV", "shaderRegister": 0 } ], "numParameters": 1 },
+  "state":  { "rasterizerState": { "cullMode": "None" } }
+}
+```
+
+- `type: "compute"` のときは `shaders.cs` だけを使い、`state` は使わない。
+- RTV / DSV のフォーマットと枚数、サンプル数は書かない (書いても、パスの出力の値で上書きする)。出力が違うパスで使うと、別の PSO を作る。
+- シェーダーのファイルは、プロジェクトのフォルダからの相対パス。`#include` はシェーダーのファイルからの相対パスで探す。
+- 名前で渡す定数 (`constants.source` が `inline` 以外) は、`IDrawListProvider::constants(name)` が返す定数バッファをつなぐ。無効なハンドルを返すと Executor はつながず、アプリが `draw` の中で `DrawContext::paramOf(name)` の場所に設定する (オブジェクトごとの定数など)。
+
+#### M3b の実装状況 (完了)
+
+| 項目 | 内容 |
+|------|------|
+| `PipelineLibrary` | `pipelines/*.json` を読み、バインディングレイアウトとパイプラインを作る。同じアセットと同じ出力のフォーマットなら作成済みのものを返す。シェーダーは `ShaderLibrary` で作るので、`.hlsl` の保存で作り直される。コンパイルの bind の検証にもレイアウトを渡す (`bindingLayout(path)`) |
+| `Executor` | 一時リソースのプール (大きさ / フォーマット / 使い方が同じものを再利用し、3 フレーム使わなければ破棄)、バリアの発行 (一時リソースは毎フレーム最初に作成時の状態へ戻す)、出力の設定とクリア、ビューポート / シザー、bind どおりのテーブル / ルート CBV / ルート定数、内容 (drawList / fullscreen / dispatch / drawIndirect / dispatchIndirect / custom / コピー / MSAA の解決)、パスごとのイベントとタイムスタンプ (4 フレームのリングで読み出す) |
+| アプリとの境界 | `FrameInputs` (基準の大きさ、`$` のリソース、`IDrawListProvider`)。`$backbuffer` などは `ImportedResource` (IRenderTarget / IDepthStencil / v2 テクスチャ / バッファ) で渡す |
+| 制限 | サブリソース単位のバリアになるグラフ、`history` / `@prev`、IRenderTarget で渡した出力とグラフのテクスチャを同じパスに混ぜること、Sampler のテーブル (静的サンプラーを使う) は、まだ実行できない (`record` がエラーを返す)。M3c 以降で対応する |
+| サンプル | `samples/rendergraph` (`GfxGraphSample`): `assets/graphs/deferred.json` (G-Buffer → ライティング → 合成) を描く。Debug + デバッグレイヤー + GBV で D3D12 のメッセージ 0 件 (通常 / リサイズ / 最小化 / 復帰)。GPU 時間を 120 フレームごとに出力する (RTX 3060 Laptop の Release で 3 パス合計 約 0.17 ms) |
+| テスト | `tests/test_rendergraph_exec.cpp` (`gfx_tests_render`、GPU / WARP): パイプラインのアセットの JSON と診断、Compute (ルート定数 + UAV) → MRT と深度 → 4 枚を SRV で読んで合成、一時リソースの再利用と大きさの変更、出力のフォーマットごとのパイプライン、GPU 時間、渡していないインポートと読めないアセットのエラー、D3D12 のメッセージ 0 件 |
 
 #### M3a の実装状況 (完了)
 
@@ -479,8 +512,8 @@ M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0) と M2a〜M2c (�
 |---------------|------|---------|
 | ~~M0~~ | doctest のテスト、GitHub Actions (WARP)、v0.1.0 のタグ | 完了 |
 | ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
-| ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b に含める |
-| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a (データ、JSON、コンパイル) は完了 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
+| ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b で入れた (パスごとの GPU 時間) |
+| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a (データ、JSON、コンパイル) と M3b (PipelineLibrary、Executor、GPU 時間) は完了 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
 | M4 | エディターの MVP(グラフ編集、リソースビューアー、Undo/Redo) | ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 

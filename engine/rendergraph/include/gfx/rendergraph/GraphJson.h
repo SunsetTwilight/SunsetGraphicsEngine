@@ -44,7 +44,7 @@ GfxJson graphToJson(const GraphDesc& graph);
 // 失敗 (エラーがある) なら false。out は既定値から読み込んだ結果 (エラーのあった項目以外は入る)
 bool graphFromJson(const GfxJson& json, GraphDesc& out, GfxJsonDiagnostics* diag = nullptr);
 
-// 文字列との変換 (ファイルの読み書きはアプリ / AssetLibrary が行う)
+// 文字列との変換 (ファイルの読み書きはアプリが行う)
 std::string graphToString(const GraphDesc& graph, int indent = 2);
 bool        graphFromString(std::string_view text, GraphDesc& out, GfxJsonDiagnostics* diag = nullptr);
 } // namespace gfx::rg

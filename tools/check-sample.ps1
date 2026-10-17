@@ -1,23 +1,25 @@
 ﻿# ============================================================
 #  tools/check-sample.ps1
 #
-#  ビルド済みの GfxExample を自動テストモードで実行し、D3D12 のバリデーションメッセージが
+#  ビルド済みのサンプル (既定は GfxExample。-Sample GfxGraphSample でレンダーグラフのサンプル) を自動テストモードで実行し、D3D12 のバリデーションメッセージが
 #  0 件であることを確認する。GFX_ENABLE_VALIDATION=ON でビルドした bin/ を指定すること。
 #
 #  使い方:
 #    powershell -ExecutionPolicy Bypass -File tools/check-sample.ps1 -BinDir build/windows-debug/bin
+#    powershell -ExecutionPolicy Bypass -File tools/check-sample.ps1 -BinDir build/windows-debug/bin -Sample GfxGraphSample
 #
 #  終了コード: すべて成功なら 0、いずれかが失敗したら 1
 # ============================================================
 param(
 	[Parameter(Mandatory = $true)][string]$BinDir,
+	[string]$Sample = 'GfxExample',
 	[int]$Frames = 600,
 	[int]$TimeoutSec = 240
 )
 
 $ErrorActionPreference = 'Stop'
-$exe = Join-Path $BinDir 'GfxExample.exe'
-if (-not (Test-Path $exe)) { Write-Error "GfxExample.exe が見つかりません: $exe" }
+$exe = Join-Path $BinDir "$Sample.exe"
+if (-not (Test-Path $exe)) { Write-Error "$Sample.exe が見つかりません: $exe" }
 
 function Invoke-Check([string]$name, [hashtable]$envVars)
 {

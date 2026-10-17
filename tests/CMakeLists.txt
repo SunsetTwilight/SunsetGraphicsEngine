@@ -2,7 +2,8 @@
 #  自動テスト (doctest + CTest)
 #
 #    gfx_tests_unit    GPU 不要 (ABI 情報、フラグ判定、スキーマの表、JSON、レンダーグラフのコンパイル)
-#    gfx_tests_render  ヘッドレスのオフスクリーン描画 (デバッグレイヤーのメッセージ 0 件) とシェーダー (DXC / リフレクション)
+#    gfx_tests_render  ヘッドレスのオフスクリーン描画 (デバッグレイヤーのメッセージ 0 件)、シェーダー (DXC / リフレクション)、
+#                      レンダーグラフの実行
 #                      環境変数 GFX_TEST_ADAPTER=software で WARP を使う (GPU のない CI 用)
 #    gfx_tests_reject  ABI の合わないバックエンド DLL が拒否されることを確認する
 #
@@ -41,9 +42,10 @@ add_executable(gfx_tests_render
     test_render.cpp
     test_shader.cpp     # DXC / リフレクション / #include
     test_reload.cpp     # シェーダー / パイプラインの作り直し、JSON からの作成、ShaderLibrary
+    test_rendergraph_exec.cpp  # レンダーグラフの実行 (PipelineLibrary / Executor)
 )
 target_link_libraries(gfx_tests_render PRIVATE
-    SunsetGraphicsEngine::core SunsetGraphicsEngine::schema gfx_doctest gfx_options)
+    SunsetGraphicsEngine::core SunsetGraphicsEngine::schema SunsetGraphicsEngine::rendergraph gfx_doctest gfx_options)
 sunset_gfx_deploy_runtime(gfx_tests_render)
 add_test(NAME render COMMAND gfx_tests_render)
 set_tests_properties(render PROPERTIES LABELS "gpu")

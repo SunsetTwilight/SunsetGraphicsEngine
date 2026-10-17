@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "resources": {
+    "gbAlbedo":   { "format": "R8G8B8A8_Unorm",     "size": { "relative": 1.0 } },
+    "gbNormal":   { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 } },
+    "depth":      { "format": "D32_Float",          "size": { "relative": 1.0 }, "clear": { "depth": 1.0 } },
+    "sceneColor": { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 } }
+  },
+  "passes": [
+    { "name": "GBuffer", "type": "Raster", "pipeline": "pipelines/gbuffer.json",
+      "constants": [ { "source": "object", "bind": { "param": 0 } },
+                     { "source": "frame",  "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "gbAlbedo", "as": "RTV0", "load": "clear" },
+                   { "res": "gbNormal", "as": "RTV1", "load": "clear" },
+                   { "res": "depth",    "as": "DSV",  "load": "clear" } ],
+      "content": { "drawList": { "layer": "Opaque", "sort": "frontToBack" } } },
+    { "name": "Lighting", "type": "Raster", "pipeline": "pipelines/lighting.json",
+      "constants": [ { "source": "frame", "bind": { "param": 0 } } ],
+      "inputs":  [ { "res": "gbAlbedo", "as": "SRV", "bind": { "param": 1, "offset": 0 }, "shaderName": "gAlbedo" },
+                   { "res": "gbNormal", "as": "SRV", "bind": { "param": 1, "offset": 1 }, "shaderName": "gNormal" },
+                   { "res": "depth",    "as": "SRV", "bind": { "param": 1, "offset": 2 }, "shaderName": "gDepth" } ],
+      "outputs": [ { "res": "sceneColor", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } },
+    { "name": "Composite", "type": "Raster", "pipeline": "pipelines/composite.json",
+      "constants": [ { "source": "frame", "bind": { "param": 0 } } ],
+      "inputs":  [ { "res": "sceneColor", "as": "SRV", "bind": { "param": 1, "offset": 0 }, "shaderName": "gScene" } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+}
