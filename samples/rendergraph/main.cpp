@@ -4,7 +4,8 @@
 //  描画の流れはすべて assets/ の JSON に書いてある:
 //    graphs/deferred.json   G-Buffer → ライティング → 合成 (リソースとパス、つなぎ方)
 //    pipelines/*.json       パイプライン (シェーダー、バインディングレイアウト、ステート)
-//    shaders/*.hlsl         シェーダー (保存すると作り直す)
+//    shaders/*.hlsl         シェーダー
+//  実行中にどのファイルを保存しても、その場で反映する (読めない / 作れない変更なら、前のまま描き続ける)。
 //  このファイルは、シーン (メッシュとオブジェクトごとの定数) とフレームの定数を用意し、
 //  IDrawListProvider としてグラフに渡すだけ。
 //
@@ -16,7 +17,7 @@
 #include "gfx/core/GraphicsEngine.h"
 #include "gfx/core/ShaderLibrary.h"
 #include "gfx/rendergraph/Executor.h"
-#include "gfx/rendergraph/GraphJson.h"
+#include "gfx/rendergraph/GraphAsset.h"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #  define WIN32_LEAN_AND_MEAN
@@ -407,21 +408,15 @@ std::filesystem::path assetRoot()
 	return std::filesystem::path(exe).parent_path() / "rendergraph_assets";
 }
 
-bool loadGraph(const std::filesystem::path& file, rg::GraphDesc& graph)
+void printGraph(const rg::GraphAsset& graph)
 {
-	std::ifstream f(file, std::ios::binary);
-	if (!f)
-	{
-		std::cerr << "[Graph] グラフを読めません: " << file.string() << "\n";
-		return false;
-	}
-	std::ostringstream ss;
-	ss << f.rdbuf();
-	GfxJsonDiagnostics diag;
-	const bool ok = rg::graphFromString(ss.str(), graph, &diag);
-	for (const auto& e : diag.errors)   std::cerr << "[Graph] error: " << e << "\n";
-	for (const auto& w : diag.warnings) std::cerr << "[Graph] warning: " << w << "\n";
-	return ok;
+	for (const auto& m : graph.messages())
+		std::cerr << "[Graph] " << m << "\n";
+	if (!graph.valid())
+		return;
+	std::cout << "[Graph] revision " << graph.revision() << ", passes:";
+	for (const auto& p : graph.compiled().passes) std::cout << " " << p.name;
+	std::cout << "\n";
 }
 } // namespace
 
@@ -475,20 +470,14 @@ int main()
 		rg::PipelineLibrary pipelines(engine, shaders);
 		pipelines.setRoot(root);
 
-		rg::GraphDesc graph;
-		if (!loadGraph(root / "graphs" / "deferred.json", graph))
-			throw std::runtime_error("グラフを読めません");
-
+		// グラフ: 保存すると読み直してコンパイルし、失敗したら前のグラフのまま描く
 		rg::CompileOptions options;
 		options.bindingLayout = [&](const std::string& p) { return pipelines.bindingLayout(p); };
-		const rg::CompiledGraph compiled = rg::compile(graph, options);
-		for (const auto& d : compiled.diagnostics)
-			std::cerr << "[Graph] " << (d.severity == rg::Diagnostic::Severity::Error ? "error: " : "warning: ") << d.text() << "\n";
-		if (!compiled.ok)
-			throw std::runtime_error("グラフのコンパイルに失敗しました");
-		std::cout << "[Graph] passes:";
-		for (const auto& p : compiled.passes) std::cout << " " << p.name;
-		std::cout << "\n";
+		rg::GraphAsset graph(root / "graphs" / "deferred.json");
+		graph.load(options);
+		printGraph(graph);
+		if (!graph.valid())
+			throw std::runtime_error("グラフを読めません");
 
 		Scene scene(engine);
 		if (!scene.valid())
@@ -530,7 +519,24 @@ int main()
 				std::cout << "[Engine] Resized to " << wstate.width << "x" << wstate.height << "\n";
 			}
 
-			shaders.poll();   // 保存された .hlsl を作り直す
+			// 保存されたアセットを反映する (.hlsl → パイプライン → グラフ)
+			shaders.poll();
+			const rg::PipelineLibrary::PollResult pr = pipelines.poll();
+			for (const auto& p : pr.reloaded) std::cout << "[HotReload] reloaded: " << p << "\n";
+			for (const auto& p : pr.failed)   std::cout << "[HotReload] failed (keeping the previous pipeline): " << p << "\n";
+			const std::string graphName = graph.file().filename().string();
+			const bool graphReloaded = graph.poll(options);
+			const bool graphFailed   = graph.lastFailed();
+			// パイプラインのレイアウトが変わると bind の検証の結果も変わるので、コンパイルし直す
+			const bool recompiled = !graphReloaded && !graphFailed && !pr.reloaded.empty() && graph.recompile(options);
+			if (graphReloaded || graphFailed || recompiled || graph.lastFailed())
+			{
+				printGraph(graph);
+				if (graphReloaded)    std::cout << "[HotReload] reloaded: " << graphName << "\n";
+				else if (recompiled)  std::cout << "[HotReload] recompiled: " << graphName << "\n";
+				else                  std::cout << "[HotReload] failed (keeping the previous graph): " << graphName << "\n";
+				graph.clearStatus();
+			}
 
 			if (!win->acquireNextBuffer())
 				throw std::runtime_error("acquireNextBuffer failed");
@@ -549,7 +555,7 @@ int main()
 
 			ICommandBuffer* cb = engine.allocCommandBuffer();
 			cb->begin();
-			executor.record(cb, graph, compiled, in);
+			executor.record(cb, graph.desc(), graph.compiled(), in);
 			cb->end();
 			engine.submitCommandBuffers({ cb });
 			cb->release();

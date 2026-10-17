@@ -1,5 +1,5 @@
 // ============================================================
-//  レンダーグラフの実行 (M3b) のテスト: PipelineLibrary と Executor
+//  レンダーグラフの実行 (M3b) とアセットの変更の反映 (M3c) のテスト: PipelineLibrary と Executor
 //
 //  一時フォルダにパイプラインのアセットとシェーダーを書き、グラフ (Compute で UAV に書く →
 //  MRT と深度に描く → 全部を SRV で読んでオフスクリーンの RT に合成する) を数フレーム実行して、
@@ -8,10 +8,12 @@
 // ============================================================
 #include <doctest/doctest.h>
 #include "gfx/rendergraph/Executor.h"
+#include "gfx/rendergraph/GraphAsset.h"
 #include "gfx/rendergraph/GraphJson.h"
 
 #include "TestCommon.h"
 
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -253,6 +255,61 @@ TEST_CASE("レンダーグラフの実行: Compute / MRT / 合成を記録して
 		dumpErrors(pipelines.errors(), "pipelines: ");
 		CHECK(executor.errors().empty());
 		CHECK(pipelines.errors().empty());
+
+		// ---- アセットの変更の反映 (M3c) ----
+		pipelines.setDebounce(std::chrono::milliseconds(0));
+		pipelines.setPollInterval(std::chrono::milliseconds(0));
+		const auto showFile = root / "pipelines" / "show.json";
+		int bump = 0;
+		auto rewrite = [&](const std::filesystem::path& p, const std::string& text) {
+			writeFile(p, text);
+			bump += 2;   // 更新時刻を確実に進める
+			std::filesystem::last_write_time(p, std::filesystem::last_write_time(p) + std::chrono::seconds(bump));
+		};
+		CHECK(pipelines.poll().reloaded.empty());
+
+		// ステートとレイアウト (SRV を 4 → 5) を変える: ハンドルはそのまま、描画も続けられる
+		rg::PipelineTargets outT;
+		outT.numRenderTargets = 1;
+		outT.rtvFormats[0]    = GfxFormat::R8G8B8A8_Unorm;
+		std::string changed = k_ShowPipeline;
+		changed.replace(changed.find("\"numDescriptors\": 4"), 19, "\"numDescriptors\": 5");
+		changed.replace(changed.find("\"cullMode\": \"None\""), 18, "\"cullMode\": \"Back\"");
+		rewrite(showFile, changed);
+		const rg::PipelineLibrary::PollResult pr = pipelines.poll();
+		CHECK(pr.reloaded == std::vector<std::string>{ "pipelines/show.json" });
+		CHECK(pr.failed.empty());
+		CHECK(pipelines.graphics("pipelines/show.json", outT).id == show1.id);
+		REQUIRE(pipelines.asset("pipelines/show.json") != nullptr);
+		CHECK(pipelines.asset("pipelines/show.json")->layout.ranges[0].numDescriptors == 5);
+		CHECK(pipelines.asset("pipelines/show.json")->state.rasterizerState.cullMode == GfxCullMode::Back);
+		for (int i = 0; i < 3; ++i)
+			CHECK(runFrame());
+
+		// 壊れた JSON / 作れないシェーダー → 前のまま描き続ける
+		const size_t errorsBefore = pipelines.errors().size();
+		rewrite(showFile, "{ \"shaders\": ");
+		CHECK(pipelines.poll().failed == std::vector<std::string>{ "pipelines/show.json" });
+		CHECK(pipelines.asset("pipelines/show.json")->layout.ranges[0].numDescriptors == 5);
+		CHECK(pipelines.errors().size() > errorsBefore);
+		rg::PipelineAsset badShader = *pipelines.asset("pipelines/show.json");
+		badShader.ps.file = "shaders/none.ps.hlsl";
+		CHECK_FALSE(pipelines.set("pipelines/show.json", badShader));
+		CHECK(pipelines.asset("pipelines/show.json")->ps.file == "shaders/show.ps.hlsl");
+		for (int i = 0; i < 3; ++i)
+			CHECK(runFrame());
+
+		// 保存: 今のアセットを書き、自分で書いた内容は変更として扱わない
+		REQUIRE(pipelines.save("pipelines/show.json"));
+		CHECK(pipelines.poll().reloaded.empty());
+		std::string savedText;
+		REQUIRE(rg::readTextFile(showFile, savedText));
+		GfxJson savedJson;
+		REQUIRE(gfxJsonParse(savedText, savedJson));
+		rg::PipelineAsset reread;
+		REQUIRE(rg::pipelineAssetFromJson(savedJson, reread));
+		CHECK(reread.layout.ranges[0].numDescriptors == 5);
+		CHECK(reread.state.rasterizerState.cullMode == GfxCullMode::Back);
 
 		// アプリが渡していないインポートは、何も記録せずにエラー
 		rg::FrameInputs missing = in;

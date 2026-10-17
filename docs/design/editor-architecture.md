@@ -464,9 +464,20 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 | `PipelineLibrary` | `pipelines/*.json` を読み、バインディングレイアウトとパイプラインを作る。同じアセットと同じ出力のフォーマットなら作成済みのものを返す。シェーダーは `ShaderLibrary` で作るので、`.hlsl` の保存で作り直される。コンパイルの bind の検証にもレイアウトを渡す (`bindingLayout(path)`) |
 | `Executor` | 一時リソースのプール (大きさ / フォーマット / 使い方が同じものを再利用し、3 フレーム使わなければ破棄)、バリアの発行 (一時リソースは毎フレーム最初に作成時の状態へ戻す)、出力の設定とクリア、ビューポート / シザー、bind どおりのテーブル / ルート CBV / ルート定数、内容 (drawList / fullscreen / dispatch / drawIndirect / dispatchIndirect / custom / コピー / MSAA の解決)、パスごとのイベントとタイムスタンプ (4 フレームのリングで読み出す) |
 | アプリとの境界 | `FrameInputs` (基準の大きさ、`$` のリソース、`IDrawListProvider`)。`$backbuffer` などは `ImportedResource` (IRenderTarget / IDepthStencil / v2 テクスチャ / バッファ) で渡す |
-| 制限 | サブリソース単位のバリアになるグラフ、`history` / `@prev`、IRenderTarget で渡した出力とグラフのテクスチャを同じパスに混ぜること、Sampler のテーブル (静的サンプラーを使う) は、まだ実行できない (`record` がエラーを返す)。M3c 以降で対応する |
+| 制限 | サブリソース単位のバリアになるグラフ、`history` / `@prev`、IRenderTarget で渡した出力とグラフのテクスチャを同じパスに混ぜること、Sampler のテーブル (静的サンプラーを使う) は、まだ実行できない (`record` がエラーを返す)。必要になった時点 (ブルームや TAA を使うとき) で対応する |
 | サンプル | `samples/rendergraph` (`GfxGraphSample`): `assets/graphs/deferred.json` (G-Buffer → ライティング → 合成) を描く。Debug + デバッグレイヤー + GBV で D3D12 のメッセージ 0 件 (通常 / リサイズ / 最小化 / 復帰)。GPU 時間を 120 フレームごとに出力する (RTX 3060 Laptop の Release で 3 パス合計 約 0.17 ms) |
 | テスト | `tests/test_rendergraph_exec.cpp` (`gfx_tests_render`、GPU / WARP): パイプラインのアセットの JSON と診断、Compute (ルート定数 + UAV) → MRT と深度 → 4 枚を SRV で読んで合成、一時リソースの再利用と大きさの変更、出力のフォーマットごとのパイプライン、GPU 時間、渡していないインポートと読めないアセットのエラー、D3D12 のメッセージ 0 件 |
+
+#### M3c の実装状況 (完了)
+
+| 項目 | 内容 |
+|------|------|
+| `GraphAsset` | グラフのファイル 1 つ。`load` (読んでコンパイル)、`poll` (変わっていたら load)、`recompile` (パイプラインのレイアウトが変わったとき)、`set` (エディターの編集)、`save` / `saveAs`。読めない / コンパイルできない変更は、前のグラフのまま `messages()` に理由を入れる。切り替えるたびに `revision()` が増える。GPU は使わない |
+| `PipelineLibrary` | `poll` で読んだアセットのファイルの変更を調べて作り直す。作成済みのパイプラインは**ハンドルのまま** `updatePipeline` で作り直し、レイアウトが変わったら新しいレイアウトに付け替える。1 つでも作れなければ、作り直したものを元に戻して前のままにする。`set` (エディターの編集)、`save` |
+| 監視 | `FileWatch`: 更新時刻が変わってから既定 100 ms 変化がなくなるのを待つ (保存の途中を読まない)。`poll` の間隔は既定 250 ms。保存は一時ファイルに書いてから置き換え、自分で書いた内容は変更として扱わない |
+| 反映の順 | アプリはフレームごとに `ShaderLibrary::poll` → `PipelineLibrary::poll` → `GraphAsset::poll` (パイプラインを作り直したら `recompile`) の順に呼ぶ。Executor は毎フレーム `PipelineLibrary` からハンドルとレイアウトを引くので、何もしなくてよい |
+| サンプル | `GfxGraphSample` の実行中に `pipelines/gbuffer.json` に `"fillMode": "Wireframe"` を足すとワイヤーフレームになり、`graphs/deferred.json` の `sceneColor` のフォーマットを変えると読み直す。ライティングを無効にする (合成の入力が書かれない) 変更や壊れた JSON では、理由を出して前のグラフのまま描き続ける。D3D12 のメッセージ 0 件 |
+| テスト | `tests/test_rendergraph.cpp` (GPU 不要): グラフのファイルの読み直し、壊れた JSON / コンパイルのエラーで前のまま、`set` / `save` / `saveAs` / `recompile`。`tests/test_rendergraph_exec.cpp` (GPU / WARP): パイプラインのステートとレイアウトの変更をハンドルのまま反映、壊れた JSON と作れないシェーダーで前のまま、`save` |
 
 #### M3a の実装状況 (完了)
 
@@ -513,7 +524,7 @@ M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0) と M2a〜M2c (�
 | ~~M0~~ | doctest のテスト、GitHub Actions (WARP)、v0.1.0 のタグ | 完了 |
 | ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
 | ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b で入れた (パスごとの GPU 時間) |
-| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a (データ、JSON、コンパイル) と M3b (PipelineLibrary、Executor、GPU 時間) は完了 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
+| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a (データ、JSON、コンパイル)、M3b (PipelineLibrary、Executor、GPU 時間)、M3c (保存とホットリロード) は完了 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
 | M4 | エディターの MVP(グラフ編集、リソースビューアー、Undo/Redo) | ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 

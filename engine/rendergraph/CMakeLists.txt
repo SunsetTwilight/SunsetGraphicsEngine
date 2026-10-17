@@ -4,6 +4,7 @@
 #  レンダーグラフ。設計: docs/design/editor-architecture.md の「Phase 3」「M3 の詳細設計」
 #    M3a: グラフのデータ (GraphDesc)、JSON との相互変換 (GraphJson)、コンパイル (Compiler)。GPU を使わない
 #    M3b: パイプラインのアセット (PipelineLibrary)、実行 (Executor)。エンジン本体 (core) を使う
+#    M3c: グラフのアセット (GraphAsset)、アセットの変更の反映と保存
 #
 #  エンジンの公開 API だけを使う (バックエンドは参照しない)。C++ の型を使うので、
 #  アプリと同じコンパイラ / 構成 (Debug / Release) でビルドしたものをリンクすること。
@@ -14,10 +15,13 @@ add_library(gfx_rendergraph STATIC
     include/gfx/rendergraph/GraphDesc.h     # グラフのデータ
     include/gfx/rendergraph/GraphJson.h     # JSON との相互変換
     include/gfx/rendergraph/Compiler.h      # コンパイル (順序 / カリング / 寿命 / バリア / bind の検証)
-    include/gfx/rendergraph/PipelineLibrary.h  # パイプラインのアセット (pipelines/*.json) の読み込みと再利用
+    include/gfx/rendergraph/FileWatch.h     # ファイルの変更の監視
+    include/gfx/rendergraph/GraphAsset.h    # グラフのアセット (graphs/*.json) の読み込み / 監視 / 保存
+    include/gfx/rendergraph/PipelineLibrary.h  # パイプラインのアセット (pipelines/*.json) の読み込み / 再利用 / 作り直し
     include/gfx/rendergraph/Executor.h      # 実行 (一時リソース、バリア、パスの記録、GPU 時間)
     src/GraphJson.cpp
     src/Compiler.cpp
+    src/GraphAsset.cpp
     src/PipelineLibrary.cpp
     src/Executor.cpp
 )

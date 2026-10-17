@@ -8,7 +8,7 @@
 |------|------|------|
 | M3a | `GraphDesc` (データ)、`GraphJson` (JSON との相互変換)、`compile()` (順序、カリング、寿命、バリア、bind の検証) | 完了 |
 | M3b | `PipelineLibrary` (パイプライン / シェーダーのアセット)、`Executor` (一時リソース、バリアの発行、パスの記録、パスごとの GPU 時間) | 完了 |
-| M3c | アセットの保存とホットリロード | 予定 |
+| M3c | `GraphAsset` (グラフのファイル)、アセットの保存とホットリロード (`PipelineLibrary::poll` / `save`) | 完了 |
 
 - 依存できるのは `engine/core` と `engine/schema` です。バックエンド (`backends/*`) は参照しません。
 - 公開ヘッダーは `include/gfx/rendergraph/` に置きます (`#include "gfx/rendergraph/RenderGraph.h"`)。
@@ -61,3 +61,25 @@ engine.submitCommandBuffers({ cb });
 
 パイプラインのアセットの形と、M3b の実行の制限は、設計ドキュメントの「パイプラインのアセット」「M3b の実装状況」を参照してください。
 サンプルは `samples/rendergraph` (`GfxGraphSample`) です。
+
+## 使い方 (M3c: 保存とホットリロード)
+
+```cpp
+#include "gfx/rendergraph/GraphAsset.h"
+
+gfx::rg::GraphAsset graph(root / "graphs/deferred.json");
+graph.load(options);                                     // 失敗したら graph.messages()
+
+// フレームごと
+shaders.poll();                                          // .hlsl
+auto pr = pipelines.poll();                              // pipelines/*.json (ハンドルのまま作り直す)
+if (!graph.poll(options) && !pr.reloaded.empty())        // graphs/*.json
+    graph.recompile(options);                            // レイアウトが変わったので bind を検証し直す
+executor.record(cb, graph.desc(), graph.compiled(), in); // 読めない変更なら前のグラフのまま
+
+// エディターの編集と保存
+graph.set(editedDesc, options);
+graph.save();
+pipelines.set("pipelines/gbuffer.json", editedAsset);
+pipelines.save("pipelines/gbuffer.json");
+```

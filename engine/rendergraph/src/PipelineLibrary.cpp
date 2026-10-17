@@ -2,6 +2,9 @@
 //  engine/rendergraph/src/PipelineLibrary.cpp
 // ============================================================
 #include "gfx/rendergraph/PipelineLibrary.h"
+#include "gfx/rendergraph/GraphAsset.h"   // readTextFile / writeTextFileAtomic / pathFromUtf8
+
+#include <algorithm>
 
 #include <fstream>
 #include <sstream>
@@ -182,19 +185,9 @@ GfxJson pipelineAssetToJson(const PipelineAsset& a)
 // ============================================================
 namespace
 {
-std::filesystem::path pathFromUtf8(const std::string& s)
+std::string layoutKey(const GfxBindingLayoutDesc& d)
 {
-	return std::filesystem::path(std::u8string(s.begin(), s.end()));
-}
-
-bool readFile(const std::filesystem::path& p, std::string& out)
-{
-	std::ifstream f(p, std::ios::binary);
-	if (!f) return false;
-	std::ostringstream ss;
-	ss << f.rdbuf();
-	out = ss.str();
-	return true;
+	return gfxJsonStringify(gfxToJson(d), 0);
 }
 } // namespace
 
@@ -219,6 +212,28 @@ void PipelineLibrary::error(const std::string& text)
 	m_errors.push_back(text);
 }
 
+bool PipelineLibrary::readAsset(Entry& e, PipelineAsset& out)
+{
+	std::string text;
+	if (!readTextFile(e.watch.path(), text))
+	{
+		error(e.path + ": パイプラインのアセットを読めません");
+		return false;
+	}
+	GfxJson json;
+	std::string parseError;
+	if (!gfxJsonParse(text, json, &parseError))
+	{
+		error(e.path + ": JSON: " + parseError);
+		return false;
+	}
+	GfxJsonDiagnostics diag;
+	const bool ok = pipelineAssetFromJson(json, out, &diag);
+	for (const auto& s : diag.errors)   error(e.path + ": " + s);
+	for (const auto& s : diag.warnings) error(e.path + ": (警告) " + s);
+	return ok;
+}
+
 PipelineLibrary::Entry* PipelineLibrary::entry(const std::string& path)
 {
 	for (auto& e : m_entries)
@@ -229,25 +244,8 @@ PipelineLibrary::Entry* PipelineLibrary::entry(const std::string& path)
 	e->path      = path;
 	e->debugName = path;
 	e->loaded    = true;
-
-	std::string text;
-	const std::filesystem::path file = m_root / pathFromUtf8(path);
-	if (!readFile(file, text))
-		error(path + ": パイプラインのアセットを読めません");
-	else
-	{
-		GfxJson json;
-		std::string parseError;
-		if (!gfxJsonParse(text, json, &parseError))
-			error(path + ": JSON: " + parseError);
-		else
-		{
-			GfxJsonDiagnostics diag;
-			e->ok = pipelineAssetFromJson(json, e->asset, &diag);
-			for (const auto& s : diag.errors)   error(path + ": " + s);
-			for (const auto& s : diag.warnings) error(path + ": (警告) " + s);
-		}
-	}
+	e->watch     = FileWatch(m_root / pathFromUtf8(path));
+	e->ok        = readAsset(*e, e->asset);
 	m_entries.push_back(std::move(e));
 	return m_entries.back().get();
 }
@@ -307,10 +305,7 @@ PipelineHandle PipelineLibrary::graphics(const std::string& path, const Pipeline
 	Variant v;
 	v.targets = targets;
 	if (e->asset.compute)
-	{
 		error(path + ": Compute のパイプラインを Raster のパスで使っています");
-		v.failed = true;
-	}
 	else
 	{
 		const BindingLayoutHandle layout = layoutHandle(path);
@@ -332,8 +327,8 @@ PipelineHandle PipelineLibrary::graphics(const std::string& path, const Pipeline
 			if (!v.handle.valid())
 				error(path + ": パイプラインを作れません (詳しくはデバッグメッセージ)");
 		}
-		v.failed = !v.handle.valid();
 	}
+	v.failed = !v.handle.valid();
 	e->variants.push_back(v);
 	return v.handle;
 }
@@ -369,6 +364,189 @@ PipelineHandle PipelineLibrary::compute(const std::string& path)
 	v.failed = !v.handle.valid();
 	e->variants.push_back(v);
 	return v.handle;
+}
+
+// ============================================================
+//  変更の反映
+// ============================================================
+// 作ったパイプラインを、ハンドルのまま新しいアセットで作り直す。1 つでも作れなければ、すべて元に戻して false
+bool PipelineLibrary::apply(Entry& e, const PipelineAsset& next)
+{
+	// まだ GPU のオブジェクトがない (前の読み込みが失敗していた、または使われていない)
+	const bool anyCreated = e.layout.valid() || std::any_of(e.variants.begin(), e.variants.end(), [](const Variant& v) { return v.handle.valid(); });
+	if (!e.ok || !anyCreated)
+	{
+		for (auto& v : e.variants)
+			if (v.handle.valid()) m_engine.destroyPipeline(v.handle);
+		if (e.layout.valid()) m_engine.destroyBindingLayout(e.layout);
+		e.layout       = {};
+		e.layoutFailed = false;
+		e.variants.clear();
+		e.asset = next;
+		e.ok    = true;
+		return true;
+	}
+
+	// graphics ⇔ compute が変わったら、中身の作り直しはできないので破棄する (次に使うときに作る。ハンドルは変わる)
+	if (next.compute != e.asset.compute)
+	{
+		for (auto& v : e.variants)
+			if (v.handle.valid()) m_engine.destroyPipeline(v.handle);
+		e.variants.clear();
+		if (e.layout.valid()) m_engine.destroyBindingLayout(e.layout);
+		e.layout       = {};
+		e.layoutFailed = false;
+		e.asset        = next;
+		return true;
+	}
+
+	// ---- バインディングレイアウト ----
+	BindingLayoutHandle layout = e.layout;
+	bool newLayout = false;
+	if (!e.layout.valid() || layoutKey(next.layout) != layoutKey(e.asset.layout))
+	{
+		GfxBindingLayoutDesc d = next.layout;
+		d.debugName = e.debugName.c_str();
+		layout = m_engine.createBindingLayout(d);
+		if (!layout.valid())
+		{
+			error(e.path + ": 新しいバインディングレイアウトを作れないので、前のままにします");
+			return false;
+		}
+		newLayout = true;
+	}
+	auto dropNewLayout = [&]() { if (newLayout) m_engine.destroyBindingLayout(layout); };
+
+	// ---- シェーダー ----
+	ShaderHandle vs, ps, cs;
+	if (next.compute)
+	{
+		cs = loadShader(e, next.cs, ShaderStage::Compute, "cs");
+		if (!cs.valid()) { dropNewLayout(); return false; }
+	}
+	else
+	{
+		vs = loadShader(e, next.vs, ShaderStage::Vertex, "vs");
+		if (next.ps.used()) ps = loadShader(e, next.ps, ShaderStage::Fragment, "ps");
+		if (!vs.valid() || (next.ps.used() && !ps.valid())) { dropNewLayout(); return false; }
+	}
+
+	// ---- パイプライン (失敗したら、作り直したものを元に戻す) ----
+	struct Done { Variant* v; GfxGraphicsPipelineDesc g; GfxComputePipelineDesc c; };
+	std::vector<Done> done;
+	bool ok = true;
+	for (auto& v : e.variants)
+	{
+		if (!v.handle.valid())
+			continue;
+		Done d{ &v, {}, {} };
+		bool updated = false;
+		if (v.computeVariant)
+		{
+			m_engine.getPipelineDesc(v.handle, d.c);
+			GfxComputePipelineDesc nd;
+			nd.bindingLayout = layout;
+			nd.cs            = cs;
+			nd.debugName     = e.debugName.c_str();
+			updated = m_engine.updatePipeline(v.handle, nd);
+		}
+		else
+		{
+			m_engine.getPipelineDesc(v.handle, d.g);
+			GfxGraphicsPipelineDesc nd = next.state;
+			nd.bindingLayout    = layout;
+			nd.vs               = vs;
+			nd.ps               = ps;
+			nd.numRenderTargets = v.targets.numRenderTargets;
+			for (uint32_t i = 0; i < GFX_MAX_RENDER_TARGETS; ++i)
+				nd.rtvFormats[i] = i < v.targets.numRenderTargets ? v.targets.rtvFormats[i] : GfxFormat::Unknown;
+			nd.dsvFormat   = v.targets.dsvFormat;
+			nd.sampleCount = v.targets.sampleCount;
+			nd.debugName   = e.debugName.c_str();
+			updated = m_engine.updatePipeline(v.handle, nd);
+		}
+		if (!updated)
+		{
+			ok = false;
+			break;
+		}
+		done.push_back(d);
+	}
+	if (!ok)
+	{
+		for (auto& d : done)
+		{
+			if (d.v->computeVariant) m_engine.updatePipeline(d.v->handle, d.c);
+			else                     m_engine.updatePipeline(d.v->handle, d.g);
+		}
+		dropNewLayout();
+		error(e.path + ": 新しいアセットでパイプラインを作れないので、前のままにします (詳しくはデバッグメッセージ)");
+		return false;
+	}
+
+	if (newLayout)
+	{
+		if (e.layout.valid()) m_engine.destroyBindingLayout(e.layout);   // GPU が使い終わるまでエンジンが解放を遅らせる
+		e.layout = layout;
+	}
+	e.layoutFailed = false;
+	// 前に作れなかった組み合わせは、次に使うときにもう一度作る
+	e.variants.erase(std::remove_if(e.variants.begin(), e.variants.end(), [](const Variant& v) { return !v.handle.valid(); }), e.variants.end());
+	e.asset = next;
+	return true;
+}
+
+bool PipelineLibrary::reload(const std::string& path)
+{
+	Entry* e = entry(path);
+	e->watch.reset();
+	PipelineAsset next;
+	if (!readAsset(*e, next))
+	{
+		if (e->ok)
+			error(path + ": 読めないので、前のアセットのままにします");
+		return false;
+	}
+	return apply(*e, next);
+}
+
+PipelineLibrary::PollResult PipelineLibrary::poll()
+{
+	PollResult result;
+	const auto now = FileWatch::Clock::now();
+	if (now - m_lastPoll < m_pollInterval)
+		return result;
+	m_lastPoll = now;
+	std::vector<std::string> changed;
+	for (auto& e : m_entries)
+		if (e->watch.changed(now, m_debounce))
+			changed.push_back(e->path);
+	for (const auto& path : changed)
+		(reload(path) ? result.reloaded : result.failed).push_back(path);
+	return result;
+}
+
+bool PipelineLibrary::set(const std::string& path, const PipelineAsset& asset)
+{
+	return apply(*entry(path), asset);
+}
+
+bool PipelineLibrary::save(const std::string& path)
+{
+	Entry* e = entry(path);
+	if (!e->ok)
+	{
+		error(path + ": 保存するアセットがありません");
+		return false;
+	}
+	std::string err;
+	if (!writeTextFileAtomic(e->watch.path(), gfxJsonStringify(pipelineAssetToJson(e->asset)) + "\n", &err))
+	{
+		error(path + ": " + err);
+		return false;
+	}
+	e->watch.reset();
+	return true;
 }
 
 void PipelineLibrary::clear()

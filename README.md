@@ -253,6 +253,8 @@ shaders.poll();   // 保存された .hlsl (と #include したファイル) を
 シェーダーとのつなぎ方の検証) ができます。M3b で、パイプラインのアセット (`PipelineLibrary`) とグラフの実行
 (`Executor`。一時リソース、バリア、パスごとの GPU 時間) が入りました。`GfxGraphSample` は、
 `samples/rendergraph/assets/` の JSON と HLSL だけでディファード (G-Buffer → ライティング → 合成) を描きます。
+M3c で、実行中に JSON (グラフとパイプライン) を保存すると、その場で描画に反映されるようになりました
+(読めない変更なら、理由を出して前のまま描き続けます)。
 詳しくは [engine/rendergraph/README.md](engine/rendergraph/README.md) を参照してください。
 
 ### 記述子と JSON

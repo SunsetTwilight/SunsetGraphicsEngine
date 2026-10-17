@@ -22,11 +22,14 @@
 //  ・RTV / DSV のフォーマット、枚数、サンプル数は、パイプラインを使うパスの出力から決める
 //    (PipelineTargets)。state に書いても上書きする。出力が違えば別の PSO を作る。
 //  ・シェーダーは ShaderLibrary で作るので、.hlsl の変更は ShaderLibrary::poll() で反映される。
-//    JSON の変更の反映は M3c。
+//  ・JSON の変更は poll() で反映する。作ったパイプラインはハンドルのまま中身を作り直す (updatePipeline)。
+//    読めない / 作れない変更なら、前のまま描き続けてエラーを記録する。
+//  ・set() はエディターの編集をそのまま反映し、save() はファイルに書く。
 //  ・エンジンと同じスレッドから呼ぶこと。
 // ============================================================
 
 #include "gfx/core/ShaderLibrary.h"
+#include "gfx/rendergraph/FileWatch.h"
 #include "gfx/schema/GfxJson.h"
 
 #include <filesystem>
@@ -93,6 +96,23 @@ public:
 	PipelineHandle      graphics(const std::string& path, const PipelineTargets& targets);
 	PipelineHandle      compute(const std::string& path);
 
+	// ---- 変更の反映 (M3c) ----
+	struct PollResult
+	{
+		std::vector<std::string> reloaded;   // 作り直したアセット
+		std::vector<std::string> failed;     // 読めない / 作れないので前のままのアセット
+	};
+	// 読んだアセットのファイルが変わっていたら作り直す。毎フレーム呼んでよい
+	PollResult poll();
+	// ファイルの更新に関係なく読み直す
+	bool reload(const std::string& path);
+	// エディターで編集したアセットに切り替える (ファイルには書かない)。作れなければ前のまま false
+	bool set(const std::string& path, const PipelineAsset& asset);
+	// 今のアセットをファイルに書く (書いた内容は変更として扱わない)
+	bool save(const std::string& path);
+	void setDebounce(std::chrono::milliseconds d)     { m_debounce = d; }
+	void setPollInterval(std::chrono::milliseconds d) { m_pollInterval = d; }
+
 	// 作ったものをすべて破棄する (switchAPI の前など)
 	void clear();
 
@@ -118,16 +138,22 @@ private:
 		bool                 layoutFailed = false;
 		std::vector<Variant> variants;
 		std::string          debugName;
+		FileWatch            watch;
 	};
 
 	Entry*       entry(const std::string& path);
 	ShaderHandle loadShader(Entry& e, const ShaderStageAsset& s, ShaderStage stage, const char* key);
 	void         error(const std::string& text);
+	bool         readAsset(Entry& e, PipelineAsset& out);
+	bool         apply(Entry& e, const PipelineAsset& next);
 
 	GraphicsEngine&                     m_engine;
 	ShaderLibrary&                      m_shaders;
 	std::filesystem::path               m_root;
 	std::vector<std::unique_ptr<Entry>> m_entries;
 	std::vector<std::string>            m_errors;
+	std::chrono::milliseconds           m_debounce{ 100 };
+	std::chrono::milliseconds           m_pollInterval{ 250 };
+	FileWatch::Clock::time_point        m_lastPoll{};
 };
 } // namespace gfx::rg

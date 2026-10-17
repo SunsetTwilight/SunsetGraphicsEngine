@@ -3,8 +3,12 @@
 // ============================================================
 #include <doctest/doctest.h>
 #include "gfx/rendergraph/RenderGraph.h"
+#include "gfx/rendergraph/GraphAsset.h"
 
 #include <algorithm>
+#include <chrono>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
 
@@ -924,4 +928,102 @@ TEST_CASE("レンダーグラフ: ビューポートとサブリソースの検�
 		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Q].outputs[1].slice", "3D"));
 		CHECK(hasDiag(e, Diagnostic::Severity::Error, "resources.probe.size", "キューブ"));
 	}
+}
+
+// ============================================================
+//  グラフのアセット (M3c): 読み込み、変更の反映、失敗したら前のまま、保存
+// ============================================================
+namespace
+{
+void writeText(const std::filesystem::path& p, const std::string& text)
+{
+	std::filesystem::create_directories(p.parent_path());
+	std::ofstream f(p, std::ios::binary | std::ios::trunc);
+	f << text;
+}
+
+// 更新時刻を確実に進める (ファイルシステムの時刻の細かさに依らないように)
+void touchLater(const std::filesystem::path& p, int seconds)
+{
+	std::filesystem::last_write_time(p, std::filesystem::last_write_time(p) + std::chrono::seconds(seconds));
+}
+
+const char* k_Undeclared = R"json({
+  "passes": [ { "name": "P", "type": "Raster", "pipeline": "p.json",
+                "inputs": [ { "res": "missing", "as": "SRV", "bind": { "param": 0 } } ],
+                "outputs": [ { "res": "$out", "as": "RTV0" } ], "content": { "fullscreen": true } } ]
+})json";
+} // namespace
+
+TEST_CASE("グラフのアセット: 保存されたら読み直し、読めなければ前のグラフのまま")
+{
+	const auto dir  = std::filesystem::temp_directory_path() / "gfx_tests_graph_asset";
+	const auto file = dir / "graphs" / "deferred.json";
+	std::filesystem::remove_all(dir);
+	writeText(file, k_Deferred);
+
+	GraphAsset graph(file);
+	graph.setDebounce(std::chrono::milliseconds(0));
+	graph.setPollInterval(std::chrono::milliseconds(0));
+	CHECK_FALSE(graph.valid());
+	REQUIRE(graph.load());
+	CHECK(graph.valid());
+	CHECK(graph.revision() == 1);
+	CHECK(order(graph.compiled()) == std::vector<std::string>{ "GBuffer", "Lighting" });
+	CHECK_FALSE(graph.poll());   // 変わっていない
+
+	// パスを無効にして保存する → 読み直す
+	GraphDesc edited = graph.desc();
+	edited.passes[0].keep = true;
+	edited.passes[1].enabled = false;
+	writeText(file, graphToString(edited));
+	touchLater(file, 2);
+	CHECK(graph.poll());
+	CHECK(graph.revision() == 2);
+	CHECK(order(graph.compiled()) == std::vector<std::string>{ "GBuffer" });
+	CHECK_FALSE(graph.lastFailed());
+
+	// 壊れた JSON → 前のまま
+	writeText(file, "{ \"passes\": [ ");
+	touchLater(file, 4);
+	CHECK_FALSE(graph.poll());
+	CHECK(graph.lastFailed());
+	CHECK(graph.revision() == 2);
+	CHECK(graph.desc() == edited);
+	REQUIRE_FALSE(graph.messages().empty());
+
+	// コンパイルのエラー → 前のまま (理由はパス付き)
+	writeText(file, k_Undeclared);
+	touchLater(file, 6);
+	CHECK_FALSE(graph.poll());
+	CHECK(graph.lastFailed());
+	CHECK(graph.revision() == 2);
+	bool hasPath = false;
+	for (const auto& m : graph.messages())
+		hasPath |= m.find("passes[P].inputs[0].res") != std::string::npos;
+	CHECK(hasPath);
+	graph.clearStatus();
+	CHECK(graph.messages().empty());
+
+	// エディターの編集 (set) と保存。自分で書いた内容は変更として扱わない
+	REQUIRE(graph.set(load(k_Deferred)));
+	CHECK(graph.revision() == 3);
+	REQUIRE(graph.save());
+	CHECK_FALSE(graph.poll());
+	std::string saved;
+	REQUIRE(readTextFile(file, saved));
+	CHECK(saved == graphToString(graph.desc()));
+	CHECK_FALSE(std::filesystem::exists(file.string() + ".tmp"));
+
+	// 別名で保存すると、以後はそのファイルを見る
+	const auto other = dir / "graphs" / "copy.json";
+	REQUIRE(graph.saveAs(other));
+	CHECK(graph.file() == other);
+	CHECK(std::filesystem::exists(other));
+
+	// コンパイルし直し (レイアウトが変わったときなど)
+	CHECK(graph.recompile());
+	CHECK(graph.revision() == 4);
+
+	std::filesystem::remove_all(dir);
 }
