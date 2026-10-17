@@ -243,6 +243,14 @@ shaders.poll();   // 保存された .hlsl (と #include したファイル) を
 サンプル (`GfxExample`) は、ビルドツリーで実行するとソースの `samples/deferred/shaders/` を直接読みます。
 実行中に `.hlsl` を保存すると、その場で反映されます (`[HotReload]` の行が出ます)。
 
+### レンダーグラフ (M3)
+
+`SunsetGraphicsEngine::rendergraph` (C++ の静的ライブラリ、`#include "gfx/rendergraph/RenderGraph.h"`) に、
+描画の手順をデータ (グラフ) で表すレンダーグラフを作っています。M3a では、グラフのデータ、
+グラフのアセット (JSON) との相互変換、コンパイル (順序、使われないパスの除外、リソースの寿命、バリア、
+シェーダーとのつなぎ方の検証) ができます。実行 (GPU) は M3b で入ります。
+詳しくは [engine/rendergraph/README.md](engine/rendergraph/README.md) を参照してください。
+
 ### 記述子と JSON
 
 `gfx/schema/GfxJson.h` (ヘッダーのみ、外部依存なし) で、記述子と JSON を相互に変換できます。

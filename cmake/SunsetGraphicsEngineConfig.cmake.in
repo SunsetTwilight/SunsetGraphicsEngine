@@ -7,6 +7,7 @@
 #    SunsetGraphicsEngine::abi     DLL 境界の C ABI (ヘッダーのみ)
 #    SunsetGraphicsEngine::schema  記述子のメタデータ表 (ヘッダーのみ)
 #    SunsetGraphicsEngine::core    本体 SunsetGraphicsEngine.dll + C++ ラッパー
+#    SunsetGraphicsEngine::rendergraph  レンダーグラフ (C++ の静的ライブラリ)
 #    SunsetGraphicsEngine::dx12    DX12 バックエンド (リンクせず、実行時にロードされる)
 #  関数:
 #    sunset_gfx_deploy_runtime(<target>)  実行ファイルの横に DLL をコピーする

@@ -368,6 +368,17 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 
 ノードエディター (React Flow でグラフを線でつないで編集する UI) は M4。
 
+#### M3a の実装状況 (完了)
+
+| 項目 | 内容 |
+|------|------|
+| ターゲット | `SunsetGraphicsEngine::rendergraph` (C++ の静的ライブラリ、名前空間 `gfx::rg`)。依存は `schema` だけ (M3a は GPU を使わない)。install / `find_package` に含める |
+| データ | `GraphDesc.h`: リソース (テクスチャ / バッファ / インポート)、パス (Raster / Compute / Copy)、入出力 (`Access`、`rtvIndex`、`LoadOp`、`bind`、`shaderName`)、定数 (`source`、`bind`、inline の値)、内容 (drawList / fullscreen / dispatch / custom)、`order` / `after` / `keep` / `enabled` |
+| JSON | `GraphJson.h`: 上の形式のとおり。既定値の項目は書かない。読むときは型の違いをエラー、知らないキーを警告にし、診断に `passes[Lighting].inputs[0].bind` のようなパスを付ける。書き出しは安定している (読み直して書くと同じ文字列) |
+| コンパイル | `Compiler.h`: 検証 → 依存 (RAW / WAR / WAW と after) → カリング (インポートへの出力と keep から RAW をさかのぼる) → 順序 (order と宣言順で並べるトポロジカルソート。循環はエラー) → 寿命 → バリア。一時リソースは最初に使う状態で作る前提で最初のバリアを出さず、インポートは `Tracked` からの遷移を出す。UAV に続けて書くときは UAV バリアを出す |
+| 検証 | 名前の重複、宣言していないリソース、使い方とパスの種類 / リソースの種類 / フォーマット (RTV に深度など)、RTV の番号の重複、DSV は 1 つ、同じパスで読みながら書く、書いていないリソースを読む (エラー)、まだ書かれていない内容を load する (警告)、bind がない / 重なる。`CompileOptions::bindingLayout` を渡すと、bind をバインディングレイアウトと照合する (パラメーターの有無、テーブルの範囲と種類、ルート定数に入る数、ルートの SRV / UAV はバッファだけ) |
+| テスト | `tests/test_rendergraph.cpp` (`gfx_tests_unit`、GPU 不要): JSON の往復と診断、ディファードの順序 / 寿命 / バリア、カリングと keep / enabled、order と after と循環、WAR / WAW、UAV バリア、検証のエラー、bind とレイアウトの照合 |
+
 ---
 
 ## Phase 4:エディター
@@ -402,7 +413,7 @@ M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0) と M2a〜M2c (�
 | ~~M0~~ | doctest のテスト、GitHub Actions (WARP)、v0.1.0 のタグ | 完了 |
 | ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
 | ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b に含める |
-| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
+| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a (データ、JSON、コンパイル) は完了 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
 | M4 | エディターの MVP(グラフ編集、リソースビューアー、Undo/Redo) | ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 
