@@ -161,7 +161,7 @@ TEST_CASE("レンダーグラフ: ディファードをコンパイルする (�
 	dump(c);
 	REQUIRE(c.ok);
 	CHECK(order(c) == std::vector<std::string>{ "GBuffer", "Lighting" });
-	CHECK(c.culled.empty());
+	CHECK(c.skipped.empty());
 
 	// 一時リソースは最初に使う状態で作る (最初はバリアなし)
 	const ResourceInfo* albedo = c.findResource("gbAlbedo");
@@ -201,22 +201,21 @@ TEST_CASE("レンダーグラフ: 結果に届かないパスを除く (keep で
 	CompiledGraph c = compile(g);
 	REQUIRE(c.ok);
 	CHECK(order(c) == std::vector<std::string>{ "GBuffer", "Lighting" });
-	REQUIRE(c.culled.size() == 1);
-	CHECK(g.passes[c.culled[0]].name == "Debug");
+	CHECK(c.skippedNames(SkippedPass::Reason::Culled) == std::vector<std::string>{ "Debug" });
 	CHECK_FALSE(c.findResource("debugTex")->used());
 	CHECK(hasDiag(c, Diagnostic::Severity::Warning, "resources.debugTex"));
 
 	g.passes.back().keep = true;
 	c = compile(g);
 	REQUIRE(c.ok);
-	CHECK(c.culled.empty());
+	CHECK(c.skipped.empty());
 	CHECK(c.indexOfPass("Debug") >= 0);
 
 	// 無効にしたパスはなかったものとして扱う
 	g.passes.back().enabled = false;
 	c = compile(g);
 	REQUIRE(c.ok);
-	CHECK(c.disabled.size() == 1);
+	CHECK(c.skippedNames(SkippedPass::Reason::Disabled) == std::vector<std::string>{ "Debug" });
 	CHECK(c.indexOfPass("Debug") < 0);
 }
 
@@ -426,5 +425,503 @@ TEST_CASE("レンダーグラフ: bind をバインディングレイアウト�
 		const CompiledGraph c = compile(g, opt);
 		CHECK(c.ok);
 		CHECK(hasDiag(c, Diagnostic::Severity::Warning, "passes[Lighting].pipeline", "確かめていません"));
+	}
+}
+
+// ============================================================
+//  いろいろな描画の流れ (設計ドキュメントの「表せる描画の流れ」)
+// ============================================================
+namespace
+{
+// パスの前のバリアのうち、リソースに対するものをすべて返す
+std::vector<BarrierOp> barriersOf(const CompiledGraph& c, const std::string& pass, const std::string& res)
+{
+	std::vector<BarrierOp> out;
+	const int32_t pi = c.indexOfPass(pass);
+	if (pi < 0) return out;
+	for (const auto& b : c.passes[static_cast<size_t>(pi)].barriers)
+		if (c.resources[b.resource].name == res)
+			out.push_back(b);
+	return out;
+}
+
+// JSON に書き出して読み直しても同じになる
+void checkRoundTrip(const GraphDesc& g)
+{
+	const std::string text = graphToString(g);
+	GraphDesc again;
+	GfxJsonDiagnostics diag;
+	const bool ok = graphFromString(text, again, &diag);
+	for (const auto& e : diag.errors) MESSAGE("json error: ", e);
+	REQUIRE(ok);
+	CHECK(again == g);
+	CHECK(graphToString(again) == text);
+}
+
+const char* k_Cascades = R"json({
+  "parameters": { "cascades": 4 },
+  "resources": {
+    "shadowMap": { "format": "D32_Float", "size": { "width": 2048, "height": 2048 }, "array": 4, "clear": { "depth": 1.0 } }
+  },
+  "passes": [
+    { "name": "Shadow", "type": "Raster", "pipeline": "pipelines/shadow.json",
+      "repeat": { "count": "cascades", "var": "i" }, "view": "cascade{i}",
+      "outputs": [ { "res": "shadowMap", "as": "DSV", "slice": "i", "load": "clear" } ],
+      "content": { "drawList": { "layer": "ShadowCaster" } } },
+    { "name": "Lighting", "type": "Raster", "pipeline": "pipelines/light.json", "after": [ "Shadow" ],
+      "inputs":  [ { "res": "shadowMap", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+})json";
+
+const char* k_Bloom = R"json({
+  "resources": {
+    "bloom": { "format": "R11G11B10_Float", "size": { "relative": 0.5 }, "mips": 5 }
+  },
+  "passes": [
+    { "name": "Prefilter", "type": "Raster", "pipeline": "pipelines/bloom_prefilter.json",
+      "inputs":  [ { "res": "$scene", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "bloom", "as": "RTV0", "mip": 0, "load": "dontCare" } ],
+      "content": { "fullscreen": true } },
+    { "name": "BloomDown", "type": "Raster", "pipeline": "pipelines/bloom_down.json",
+      "repeat": { "count": 4, "var": "i", "start": 1 },
+      "inputs":  [ { "res": "bloom", "as": "SRV", "mip": "i-1", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "bloom", "as": "RTV0", "mip": "i", "load": "dontCare" } ],
+      "content": { "fullscreen": true } },
+    { "name": "Composite", "type": "Raster", "pipeline": "pipelines/composite.json",
+      "inputs":  [ { "res": "$scene", "as": "SRV", "bind": { "param": 1, "offset": 0 } },
+                   { "res": "bloom",  "as": "SRV", "bind": { "param": 1, "offset": 1 } } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+})json";
+
+const char* k_Taa = R"json({
+  "resources": {
+    "taaColor": { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 }, "history": true }
+  },
+  "passes": [
+    { "name": "TAA", "type": "Compute", "pipeline": "pipelines/taa.json",
+      "inputs":  [ { "res": "$scene",        "as": "SRV", "bind": { "param": 1, "offset": 0 } },
+                   { "res": "taaColor@prev", "as": "SRV", "bind": { "param": 1, "offset": 1 } } ],
+      "outputs": [ { "res": "taaColor", "as": "UAV", "load": "dontCare", "bind": { "param": 2 } } ],
+      "content": { "dispatch": [ 120, 68, 1 ] } },
+    { "name": "Present", "type": "Raster", "pipeline": "pipelines/present.json",
+      "inputs":  [ { "res": "taaColor", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+})json";
+
+const char* k_ForwardPlus = R"json({
+  "resources": {
+    "depth":     { "format": "D32_Float", "size": { "relative": 1.0 } },
+    "lightGrid": { "kind": "buffer", "bytes": 65536 }
+  },
+  "passes": [
+    { "name": "DepthPrepass", "type": "Raster", "pipeline": "pipelines/depth.json",
+      "outputs": [ { "res": "depth", "as": "DSV", "load": "clear" } ],
+      "content": { "drawList": { "layer": "Opaque", "sort": "frontToBack" } } },
+    { "name": "LightCull", "type": "Compute", "pipeline": "pipelines/light_cull.json",
+      "inputs":  [ { "res": "depth", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "lightGrid", "as": "UAV", "load": "dontCare", "bind": { "param": 2 } } ],
+      "content": { "dispatch": [ 80, 45, 1 ] } },
+    { "name": "Forward", "type": "Raster", "pipeline": "pipelines/forward.json",
+      "inputs":  [ { "res": "lightGrid", "as": "SRV", "bind": { "param": 1 } },
+                   { "res": "depth",     "as": "DSVRead" } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "clear" } ],
+      "content": { "drawList": { "layer": "Opaque" } } }
+  ]
+})json";
+
+const char* k_Msaa = R"json({
+  "resources": {
+    "sceneMS":    { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 }, "samples": 4 },
+    "depthMS":    { "format": "D32_Float",          "size": { "relative": 1.0 }, "samples": 4 },
+    "sceneColor": { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 } }
+  },
+  "passes": [
+    { "name": "Opaque", "type": "Raster", "pipeline": "pipelines/opaque.json",
+      "outputs": [ { "res": "sceneMS", "as": "RTV0", "load": "clear" },
+                   { "res": "depthMS", "as": "DSV",  "load": "clear" } ],
+      "content": { "drawList": { "layer": "Opaque" } } },
+    { "name": "Resolve", "type": "Copy",
+      "inputs":  [ { "res": "sceneMS",    "as": "ResolveSrc" } ],
+      "outputs": [ { "res": "sceneColor", "as": "ResolveDst" } ] },
+    { "name": "Tonemap", "type": "Raster", "pipeline": "pipelines/tonemap.json",
+      "inputs":  [ { "res": "sceneColor", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+})json";
+
+const char* k_Indirect = R"json({
+  "resources": {
+    "dispatchArgs": { "kind": "buffer", "bytes": 64 }
+  },
+  "passes": [
+    { "name": "BuildArgs", "type": "Compute", "pipeline": "pipelines/build_args.json",
+      "outputs": [ { "res": "dispatchArgs", "as": "UAV", "load": "dontCare", "bind": { "param": 2 } } ],
+      "content": { "dispatch": [ 1, 1, 1 ] } },
+    { "name": "Cull", "type": "Compute", "pipeline": "pipelines/cull.json",
+      "inputs":  [ { "res": "dispatchArgs", "as": "IndirectArgs" } ],
+      "outputs": [ { "res": "$visible", "as": "UAV", "load": "dontCare", "bind": { "param": 2 } } ],
+      "content": { "dispatchIndirect": { "args": "dispatchArgs", "offset": 0 } } }
+  ]
+})json";
+
+const char* k_Conditional = R"json({
+  "parameters": { "ssao": true, "blurPasses": 2 },
+  "resources": {
+    "ao": { "format": "R8_Unorm", "size": { "relative": 0.5 } }
+  },
+  "passes": [
+    { "name": "SSAO", "type": "Compute", "pipeline": "pipelines/ssao.json", "when": "ssao",
+      "inputs":  [ { "res": "$depth", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "ao", "as": "UAV", "load": "dontCare", "bind": { "param": 2 } } ],
+      "content": { "dispatch": [ 60, 34, 1 ] } },
+    { "name": "Blur", "type": "Compute", "pipeline": "pipelines/blur.json", "when": "ssao",
+      "repeat": { "count": "blurPasses" },
+      "inputs":  [ { "res": "ao", "as": "UAV", "bind": { "param": 2 } } ],
+      "outputs": [ { "res": "ao", "as": "UAV", "bind": { "param": 2 } } ],
+      "content": { "dispatch": [ 60, 34, 1 ] } },
+    { "name": "Composite", "type": "Raster", "pipeline": "pipelines/composite_ao.json", "when": "ssao",
+      "inputs":  [ { "res": "ao", "as": "SRV", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } },
+    { "name": "CompositeNoAO", "type": "Raster", "pipeline": "pipelines/composite.json", "when": "!ssao",
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+})json";
+} // namespace
+
+TEST_CASE("レンダーグラフ: カスケードシャドウ (配列のスライスごとに repeat)")
+{
+	const GraphDesc g = load(k_Cascades);
+	checkRoundTrip(g);
+	const CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "Shadow[0]", "Shadow[1]", "Shadow[2]", "Shadow[3]", "Lighting" });
+
+	const CompiledPass& s2 = c.passes[2];
+	CHECK(s2.iteration == 2);
+	CHECK(s2.passIndex == 0);
+	CHECK(s2.desc.view == "cascade2");
+	CHECK(s2.desc.outputs[0].slice.value == 2);
+	CHECK_FALSE(s2.desc.repeat.set);
+
+	const ResourceInfo* sm = c.findResource("shadowMap");
+	REQUIRE(sm != nullptr);
+	CHECK(sm->layers == 4);
+	CHECK(sm->initialState == GfxResourceState::DepthWrite);
+	CHECK(barriersOf(c, "Shadow[1]", "shadowMap").empty());   // 作ったときから DepthWrite
+
+	// すべてのスライスが同じ状態なので、1 つのバリアにまとめる
+	const auto lb = barriersOf(c, "Lighting", "shadowMap");
+	REQUIRE(lb.size() == 1);
+	CHECK(lb[0].subresource == GFX_ALL_SUBRESOURCES);
+	CHECK(lb[0].before == GfxResourceState::DepthWrite);
+	CHECK(lb[0].after == GfxResourceState::AllShaderResource);
+
+	// 配列の範囲を超えるスライス
+	CompileOptions opt;
+	opt.parameters["cascades"] = 5;
+	const CompiledGraph c5 = compile(g, opt);
+	CHECK_FALSE(c5.ok);
+	CHECK(hasDiag(c5, Diagnostic::Severity::Error, "passes[Shadow[4]].outputs[0].slice", "スライス 4 はありません"));
+}
+
+TEST_CASE("レンダーグラフ: ブルームの mip の連鎖 (同じテクスチャの別の mip を読み書きする)")
+{
+	const GraphDesc g = load(k_Bloom);
+	checkRoundTrip(g);
+	CHECK(g.passes[1].inputs[0].mip.var == "i");
+	CHECK(g.passes[1].inputs[0].mip.add == -1);
+
+	const CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "Prefilter", "BloomDown[0]", "BloomDown[1]", "BloomDown[2]", "BloomDown[3]", "Composite" });
+	CHECK(c.passes[1].desc.inputs[0].mip.value == 0);
+	CHECK(c.passes[1].desc.outputs[0].mip.value == 1);
+
+	const ResourceInfo* bloom = c.findResource("bloom");
+	REQUIRE(bloom != nullptr);
+	CHECK(bloom->mips == 5);
+	CHECK(bloom->initialState == GfxResourceState::RenderTarget);
+
+	// BloomDown[1] は mip 1 を読む状態にする (mip 2 は RenderTarget のまま)
+	const auto b1 = barriersOf(c, "BloomDown[1]", "bloom");
+	REQUIRE(b1.size() == 1);
+	CHECK(b1[0].subresource == 1);
+	CHECK(b1[0].after == GfxResourceState::AllShaderResource);
+
+	// 最後に、まだ RenderTarget の mip 4 だけを遷移させる
+	const auto bc = barriersOf(c, "Composite", "bloom");
+	REQUIRE(bc.size() == 1);
+	CHECK(bc[0].subresource == 4);
+	CHECK(bloom->finalState == GfxResourceState::AllShaderResource);
+	CHECK(bloom->finalUniform);
+
+	SUBCASE("同じ mip を読みながら書くのはエラー")
+	{
+		GraphDesc bad = g;
+		REQUIRE(parseIndexExpr("i", bad.passes[1].inputs[0].mip));
+		const CompiledGraph e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[BloomDown[0]].outputs[0]", "読みながら書く"));
+	}
+	SUBCASE("mip の範囲外 / RTV に mip を 1 つ指定しない")
+	{
+		GraphDesc bad = g;
+		bad.passes[1].repeat.count = 5;   // i = 5 は範囲外
+		bad.passes[0].outputs[0].mip = IndexValue{};
+		const CompiledGraph e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[BloomDown[4]].outputs[0].mip", "mip 5 はありません"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Prefilter].outputs[0].mip", "1 つ"));
+	}
+	SUBCASE("repeat のないパスで変数を使う / 負になる")
+	{
+		GraphDesc bad = g;
+		REQUIRE(parseIndexExpr("i", bad.passes[0].outputs[0].mip));
+		bad.passes[1].repeat.start = 0;   // i-1 = -1
+		const CompiledGraph e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Prefilter].outputs[0].mip", "repeat"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[BloomDown[0]].inputs[0].mip", "負"));
+	}
+}
+
+TEST_CASE("レンダーグラフ: TAA (前フレームの内容を name@prev で読む)")
+{
+	const GraphDesc g = load(k_Taa);
+	checkRoundTrip(g);
+	const CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "TAA", "Present" });
+
+	const ResourceInfo* prev = c.findResource("taaColor@prev");
+	REQUIRE(prev != nullptr);
+	CHECK(prev->isPrev());
+	CHECK(c.resources[static_cast<size_t>(prev->historyOf)].name == "taaColor");
+
+	// 履歴のリソースはフレームをまたいで残るので、最初はエンジンの状態追跡の値から遷移する
+	const BarrierOp* hp = findBarrier(c, "TAA", "taaColor@prev");
+	REQUIRE(hp != nullptr);
+	CHECK(hp->before == GfxResourceState::Tracked);
+	CHECK(hp->after == GfxResourceState::NonPixelShaderResource);
+	const BarrierOp* hc = findBarrier(c, "TAA", "taaColor");
+	REQUIRE(hc != nullptr);
+	CHECK(hc->before == GfxResourceState::Tracked);
+	CHECK(hc->after == GfxResourceState::UnorderedAccess);
+	CHECK(findBarrier(c, "Present", "taaColor")->before == GfxResourceState::UnorderedAccess);
+
+	SUBCASE("@prev を読むパスが残るなら、元のリソースを書くパスも残す")
+	{
+		GraphDesc g2;
+		ResourceDesc acc = tex("accum", GfxFormat::R16G16B16A16_Float);
+		acc.history = true;
+		g2.resources = { acc };
+		g2.passes.push_back(raster("Show", { ref("accum@prev", Access::SRV, 0, LoadOp::Load, { 1, 0 }) }, { ref("$backbuffer", Access::RTV) }));
+		g2.passes.push_back(raster("Accumulate", {}, { ref("accum", Access::RTV, 0, LoadOp::DontCare) }));
+		const CompiledGraph c2 = compile(g2);
+		dump(c2);
+		REQUIRE(c2.ok);
+		CHECK(order(c2) == std::vector<std::string>{ "Show", "Accumulate" });
+		CHECK(c2.skipped.empty());
+	}
+	SUBCASE("history でないリソースの @prev / @prev に書く")
+	{
+		GraphDesc bad = g;
+		bad.resources[0].history = false;
+		CompiledGraph e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[TAA].inputs[1].res", "history"));
+
+		bad = g;
+		bad.passes[0].outputs.push_back(ref("taaColor@prev", Access::UAV, 0, LoadOp::DontCare, { 2, 1 }));
+		e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[TAA].outputs[1].res", "@prev"));
+	}
+}
+
+TEST_CASE("レンダーグラフ: Forward+ (Compute でライトを分類し、フォワードで読む)")
+{
+	const GraphDesc g = load(k_ForwardPlus);
+	checkRoundTrip(g);
+	const CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "DepthPrepass", "LightCull", "Forward" });
+	CHECK(findBarrier(c, "LightCull", "depth")->after == GfxResourceState::NonPixelShaderResource);
+	CHECK(findBarrier(c, "Forward", "depth")->after == GfxResourceState::DepthRead);
+	CHECK(c.findResource("lightGrid")->initialState == GfxResourceState::UnorderedAccess);
+	CHECK(findBarrier(c, "Forward", "lightGrid")->after == GfxResourceState::AllShaderResource);
+}
+
+TEST_CASE("レンダーグラフ: MSAA の解決 (Copy のパスの ResolveSrc / ResolveDst)")
+{
+	const GraphDesc g = load(k_Msaa);
+	checkRoundTrip(g);
+	const CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "Opaque", "Resolve", "Tonemap" });
+	const BarrierOp* src = findBarrier(c, "Resolve", "sceneMS");
+	REQUIRE(src != nullptr);
+	CHECK(src->before == GfxResourceState::RenderTarget);
+	CHECK(src->after == GfxResourceState::ResolveSource);
+	CHECK(c.findResource("sceneColor")->initialState == GfxResourceState::ResolveDest);
+	CHECK(findBarrier(c, "Tonemap", "sceneColor")->before == GfxResourceState::ResolveDest);
+	CHECK(hasDiag(c, Diagnostic::Severity::Warning, "resources.depthMS") == false);
+
+	SUBCASE("MSAA でないテクスチャの解決 / MSAA への解決 / MSAA と mip")
+	{
+		GraphDesc bad = g;
+		std::swap(bad.passes[1].inputs[0].res, bad.passes[1].outputs[0].res);
+		bad.resources[2].mipLevels = 2;
+		bad.resources[0].mipLevels = 2;
+		const CompiledGraph e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Resolve].inputs[0].as", "ResolveSrc"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Resolve].outputs[0].as", "ResolveDst"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "resources.sceneMS.mips", "MSAA"));
+	}
+}
+
+TEST_CASE("レンダーグラフ: 間接 dispatch (引数のバッファを IndirectArgs で読む)")
+{
+	const GraphDesc g = load(k_Indirect);
+	checkRoundTrip(g);
+	const CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "BuildArgs", "Cull" });
+	const BarrierOp* b = findBarrier(c, "Cull", "dispatchArgs");
+	REQUIRE(b != nullptr);
+	CHECK(b->before == GfxResourceState::UnorderedAccess);
+	CHECK(b->after == GfxResourceState::IndirectArgument);
+
+	SUBCASE("引数のバッファを入力に書いていない / Compute で drawIndirect")
+	{
+		GraphDesc bad = g;
+		bad.passes[1].inputs.clear();
+		CompiledGraph e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Cull].content.dispatchIndirect.args", "IndirectArgs"));
+
+		bad = g;
+		bad.passes[1].content.kind = ContentKind::DrawIndirect;
+		e = compile(bad);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Cull].content", "Compute"));
+	}
+}
+
+TEST_CASE("レンダーグラフ: パラメーターと when で、パスの有無を切り替える")
+{
+	const GraphDesc g = load(k_Conditional);
+	checkRoundTrip(g);
+	REQUIRE(g.parameters.size() == 2);
+
+	CompiledGraph c = compile(g);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "SSAO", "Blur[0]", "Blur[1]", "Composite" });
+	CHECK(c.skippedNames(SkippedPass::Reason::Condition) == std::vector<std::string>{ "CompositeNoAO" });
+	REQUIRE(findBarrier(c, "Blur[1]", "ao") != nullptr);
+	CHECK(findBarrier(c, "Blur[1]", "ao")->type == GfxBarrierType::UAV);
+
+	// アプリが上書きする
+	CompileOptions opt;
+	opt.parameters["ssao"] = 0;
+	c = compile(g, opt);
+	dump(c);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "CompositeNoAO" });
+	CHECK(c.skippedNames(SkippedPass::Reason::Condition) == std::vector<std::string>{ "SSAO", "Blur", "Composite" });
+	CHECK(c.parameters.at("ssao") == 0);
+	CHECK(hasDiag(c, Diagnostic::Severity::Warning, "resources.ao"));   // 使われない
+
+	// 繰り返しの数を 0 にすると、そのパスは実行しない
+	opt.parameters = { { "blurPasses", 0 } };
+	c = compile(g, opt);
+	REQUIRE(c.ok);
+	CHECK(order(c) == std::vector<std::string>{ "SSAO", "Composite" });
+
+	// 知らないパラメーターの上書きは警告、ないパラメーターを when で使うとエラー
+	opt.parameters = { { "noSuchParam", 1 } };
+	c = compile(g, opt);
+	CHECK(c.ok);
+	CHECK(hasDiag(c, Diagnostic::Severity::Warning, "parameters.noSuchParam"));
+
+	GraphDesc bad = g;
+	bad.passes[0].when = "ssaoo";
+	c = compile(bad);
+	CHECK_FALSE(c.ok);
+	CHECK(hasDiag(c, Diagnostic::Severity::Error, "passes[SSAO].when", "ssaoo"));
+}
+
+TEST_CASE("レンダーグラフ: ビューポートとサブリソースの検証")
+{
+	GraphDesc g;
+	ResourceDesc atlas = tex("atlas", GfxFormat::D32_Float);
+	atlas.size.relative = false; atlas.size.width = 4096; atlas.size.height = 4096;
+	g.resources = { atlas };
+	PassDesc p = raster("Atlas", {}, { ref("atlas", Access::DSV, 0, LoadOp::Clear) });
+	p.keep = true;
+	p.viewport.set = true;
+	p.viewport.x = 0.5f; p.viewport.y = 0.0f; p.viewport.width = 0.5f; p.viewport.height = 0.5f;
+	g.passes = { p };
+	checkRoundTrip(g);
+	CompiledGraph c = compile(g);
+	dump(c);
+	CHECK(c.ok);
+
+	g.passes[0].viewport.width = 0.75f;   // 0.5 + 0.75 > 1
+	g.passes[0].scissor.set = true;
+	g.passes[0].scissor.relative = false;
+	g.passes[0].scissor.width = 0;
+	c = compile(g);
+	CHECK_FALSE(c.ok);
+	CHECK(hasDiag(c, Diagnostic::Severity::Error, "passes[Atlas].viewport", "範囲"));
+	CHECK(hasDiag(c, Diagnostic::Severity::Error, "passes[Atlas].scissor", "幅と高さ"));
+
+	SUBCASE("インポート / バッファ / 3D のスライス / キューブの大きさ")
+	{
+		GraphDesc s;
+		ResourceDesc vol = tex("vol", GfxFormat::R16G16B16A16_Float);
+		vol.dimension = TextureDimension::Tex3D; vol.depth = 32;
+		ResourceDesc cube = tex("probe", GfxFormat::R16G16B16A16_Float);
+		cube.dimension = TextureDimension::Cube; cube.size.relative = false; cube.size.width = 256; cube.size.height = 128;
+		ResourceDesc buf;
+		buf.name = "buf"; buf.kind = ResourceKind::Buffer; buf.byteSize = 256;
+		s.resources = { vol, cube, buf };
+
+		PassDesc q;
+		q.name = "Q"; q.type = PassType::Compute; q.pipeline = "pipelines/q.json"; q.content.kind = ContentKind::Dispatch; q.keep = true;
+		PassResourceRef imported = ref("$scene", Access::SRV, 0, LoadOp::Load, { 1, 0 });
+		imported.mip = IndexValue::fixed(1);
+		PassResourceRef bufRef = ref("buf", Access::UAV, 0, LoadOp::DontCare, { 2, 0 });
+		bufRef.mip = IndexValue::fixed(0);
+		PassResourceRef volRef = ref("vol", Access::UAV, 0, LoadOp::DontCare, { 2, 1 });
+		volRef.slice = IndexValue::fixed(3);
+		q.inputs  = { imported };
+		q.outputs = { bufRef, volRef };
+		s.passes = { q };
+		checkRoundTrip(s);
+
+		const CompiledGraph e = compile(s);
+		CHECK_FALSE(e.ok);
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Q].inputs[0]", "インポート"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Q].outputs[0]", "バッファ"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "passes[Q].outputs[1].slice", "3D"));
+		CHECK(hasDiag(e, Diagnostic::Severity::Error, "resources.probe.size", "キューブ"));
 	}
 }

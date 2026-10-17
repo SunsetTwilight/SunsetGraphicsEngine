@@ -345,6 +345,73 @@ Graph
 - `constants.source` は、アプリが名前で渡す定数バッファ (`frame` など) か、JSON に書いた値 (`inline`)。
 - `$backbuffer` などの `$` で始まる名前は、実行時にアプリが渡すインポートのリソース。
 
+#### 表せる描画の流れ (2026-10-17 決定)
+
+ディファード専用にはしない。一般的な描画手法を、グラフのデータとして表せることを目標にする。
+
+| 手法 | 表し方 |
+|------|--------|
+| フォワード / Forward+ | Compute でライトを分類してバッファに書き、フォワードのパスが SRV で読む |
+| ディファード (G-Buffer の構成は自由)、タイル / クラスターのライティング | 複数の RTV、Compute で UAV のテクスチャに書く |
+| シャドウマップ / カスケードシャドウ / キューブマップの影と反射プローブ | 配列 / キューブのテクスチャ、出力の `slice`、`repeat` でスライスごとにパスを並べ、`view` でカメラを差し替える |
+| シャドウアトラス、部分的な描画 | パスの `viewport` / `scissor` |
+| ブルームの縮小 / 拡大、mip の生成 | mip を持つテクスチャ、入出力の `mip`、`repeat` で mip ごとにパスを並べる (読む mip と書く mip が違えば、同じテクスチャを同じパスで読み書きしてよい) |
+| TAA、SSR / ボリュメトリックの時間方向の積み上げ | `history: true` のリソース。`name@prev` で前フレームの内容を読む |
+| 半透明、デカール、アウトライン | 深度を `DSVRead` で読みながら RTV に重ねて描く (`load: load`) |
+| MSAA | サンプル数を持つテクスチャ、Copy のパスの `ResolveSrc` / `ResolveDst` |
+| GPU 主導の描画 | `content` の `drawIndirect` / `dispatchIndirect` (引数バッファは入力の `IndirectArgs`) |
+| フォーマットの読み替え (sRGB、深度を R32 で読む) | 入出力の `format` (ビューのフォーマット) |
+| 品質設定、機能のオン / オフ | グラフの `parameters` と、パスの `when` |
+| 複数のビュー (分割画面、エディターの複数ビューポート) | 同じグラフを、別のカメラと別の `$` 出力で複数回実行する |
+| レイトレーシング (影、反射、GI) | `type: "RayTrace"` (**名前と意味だけ決める**。エンジンの汎用の RT パイプラインのあとで実装) |
+| ブルームなどの部品化と再利用 | `type: "Subgraph"` と `graph` (別のグラフのアセットを、入出力をつないで埋め込む。**名前と意味だけ決める**。M4 のエディターと合わせて実装) |
+| 非同期 Compute | パスの `queue: "compute"` (**名前と意味だけ決める**。エンジンが複数のキューに対応したら実装) |
+
+追加する項目の JSON:
+
+```json
+{
+  "parameters": { "ssao": true, "cascades": 4 },
+  "resources": {
+    "shadowMap": { "format": "D32_Float", "size": { "width": 2048, "height": 2048 }, "array": 4 },
+    "envProbe":  { "format": "R16G16B16A16_Float", "dimension": "cube", "size": { "width": 256, "height": 256 }, "mips": 5 },
+    "fogVolume": { "format": "R16G16B16A16_Float", "dimension": "3d", "size": { "width": 160, "height": 90 }, "depth": 64 },
+    "bloom":     { "format": "R11G11B10_Float", "size": { "relative": 0.5 }, "mips": 5 },
+    "taaColor":  { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 }, "history": true },
+    "sceneMS":   { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 }, "samples": 4 }
+  },
+  "passes": [
+    { "name": "Shadow", "type": "Raster", "pipeline": "pipelines/shadow.json",
+      "repeat": { "count": "cascades", "var": "i" }, "view": "cascade{i}",
+      "outputs": [ { "res": "shadowMap", "as": "DSV", "slice": "i", "load": "clear" } ],
+      "content": { "drawList": { "layer": "ShadowCaster" } } },
+    { "name": "BloomDown", "type": "Raster", "pipeline": "pipelines/bloom_down.json",
+      "repeat": { "count": 4, "var": "i", "start": 1 },
+      "inputs":  [ { "res": "bloom", "as": "SRV", "mip": "i-1", "bind": { "param": 1 } } ],
+      "outputs": [ { "res": "bloom", "as": "RTV0", "mip": "i", "load": "dontCare" } ],
+      "content": { "fullscreen": true } },
+    { "name": "TAA", "type": "Compute", "pipeline": "pipelines/taa.json",
+      "inputs":  [ { "res": "taaColor@prev", "as": "SRV", "bind": { "param": 1, "offset": 1 } } ],
+      "outputs": [ { "res": "taaColor", "as": "UAV", "load": "dontCare", "bind": { "param": 2 } } ],
+      "content": { "dispatch": [ 120, 68, 1 ] } },
+    { "name": "SSAO", "when": "ssao", "type": "Compute", "...": "..." },
+    { "name": "Resolve", "type": "Copy",
+      "inputs":  [ { "res": "sceneMS", "as": "ResolveSrc" } ],
+      "outputs": [ { "res": "sceneColor", "as": "ResolveDst" } ] },
+    { "name": "Cull", "type": "Compute", "pipeline": "pipelines/cull.json",
+      "inputs": [ { "res": "dispatchArgs", "as": "IndirectArgs" } ],
+      "content": { "dispatchIndirect": { "args": "dispatchArgs", "offset": 0 } } },
+    { "name": "Atlas", "type": "Raster", "viewport": { "x": 0.5, "y": 0, "width": 0.5, "height": 0.5 }, "...": "..." }
+  ]
+}
+```
+
+- `mip` / `slice` は数値か、`repeat` の変数を使った `"i"` / `"i+1"` / `"i-1"`。省略するとすべて。範囲は `mipCount` / `sliceCount` (省略すると 1)。
+- `repeat.count` は数値か、グラフのパラメーターの名前。繰り返したパスの名前は `Shadow[0]`、`Shadow[1]` … になる。`after` に元の名前を書くと、すべての繰り返しのあとになる。`view` の `{i}` は値に置き換える。
+- `when` はパラメーターの名前 (`"!ssao"` で否定)。偽ならパスはなかったものとしてコンパイルする。パラメーターの値は、コンパイルのときにアプリが上書きできる。
+- バリアと依存はサブリソース (mip とスライス) 単位で扱う。インポートしたリソースのサブリソースの指定と、`history` のリソースの mip / 配列は、当面は使えない (エラー)。
+- `viewport` / `scissor` は既定で出力の大きさに対する比率 (`"relative": false` でピクセル)。
+
 #### 構成 (エンジンの `engine/rendergraph/`、ターゲット `SunsetGraphicsEngine::rendergraph`)
 
 C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だけを使うので、DLL の境界の外にあり、ABI の網羅性を確かめる利用者にもなる。
@@ -361,7 +428,7 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 
 | 段階 | 場所 | 内容 | 完了条件 |
 |------|------|------|---------|
-| **M3a** コア | エンジン | `GraphDesc`、`compile()` | GPU を使わない単体テストで、順序、カリング、寿命、バリアの計画、`bind` の検証が正しい |
+| **M3a** コア | エンジン | `GraphDesc`、`compile()`。上の「表せる描画の流れ」の項目 (RayTrace / Subgraph / queue を除く) | GPU を使わない単体テストで、順序、カリング、寿命、バリアの計画、`bind` の検証が正しい。カスケードシャドウ、ブルームの mip の連鎖、TAA の履歴、Forward+、MSAA の解決、間接 dispatch、条件付きのパスの例がコンパイルできる |
 | **M3b** 実行 | エンジン | `AssetLibrary`、`Executor` (Raster / Fullscreen / Compute)、パスごとの GPU 時間 (M2d) | サンプルのディファード (G-Buffer → ライティング → 合成) をグラフで描け、D3D12 のメッセージが 0 件 |
 | **M3c** 保存とホットリロード | エンジン | グラフとパイプラインのアセットの JSON の読み書き、ファイルの変更での作り直し | JSON を編集すると、サンプルの描画がその場で変わる |
 | **M3d** エディター | Studio | ビューポートをグラフで描く。アウトライナーにパスの一覧と GPU 時間、インスペクターでパスのパイプラインとつなぎ方を編集する | エディターで G-Buffer の構成や合成のブレンドを変え、すぐ反映される |
@@ -373,11 +440,11 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 | 項目 | 内容 |
 |------|------|
 | ターゲット | `SunsetGraphicsEngine::rendergraph` (C++ の静的ライブラリ、名前空間 `gfx::rg`)。依存は `schema` だけ (M3a は GPU を使わない)。install / `find_package` に含める |
-| データ | `GraphDesc.h`: リソース (テクスチャ / バッファ / インポート)、パス (Raster / Compute / Copy)、入出力 (`Access`、`rtvIndex`、`LoadOp`、`bind`、`shaderName`)、定数 (`source`、`bind`、inline の値)、内容 (drawList / fullscreen / dispatch / custom)、`order` / `after` / `keep` / `enabled` |
+| データ | `GraphDesc.h`: パラメーター (bool / 整数)、リソース (テクスチャ / バッファ / インポート。テクスチャは 2D / キューブ / 3D、配列、mip、MSAA、`history`)、パス (Raster / Compute / Copy)、入出力 (`Access` (`ResolveSrc` / `ResolveDst` を含む)、`rtvIndex`、`LoadOp`、`bind`、`shaderName`、`mip` / `slice` とその数、ビューの `format`)、定数 (`source`、`bind`、inline の値)、内容 (drawList / fullscreen / dispatch / drawIndirect / dispatchIndirect / custom)、`view`、`viewport` / `scissor`、`repeat`、`when`、`order` / `after` / `keep` / `enabled` |
 | JSON | `GraphJson.h`: 上の形式のとおり。既定値の項目は書かない。読むときは型の違いをエラー、知らないキーを警告にし、診断に `passes[Lighting].inputs[0].bind` のようなパスを付ける。書き出しは安定している (読み直して書くと同じ文字列) |
-| コンパイル | `Compiler.h`: 検証 → 依存 (RAW / WAR / WAW と after) → カリング (インポートへの出力と keep から RAW をさかのぼる) → 順序 (order と宣言順で並べるトポロジカルソート。循環はエラー) → 寿命 → バリア。一時リソースは最初に使う状態で作る前提で最初のバリアを出さず、インポートは `Tracked` からの遷移を出す。UAV に続けて書くときは UAV バリアを出す |
-| 検証 | 名前の重複、宣言していないリソース、使い方とパスの種類 / リソースの種類 / フォーマット (RTV に深度など)、RTV の番号の重複、DSV は 1 つ、同じパスで読みながら書く、書いていないリソースを読む (エラー)、まだ書かれていない内容を load する (警告)、bind がない / 重なる。`CompileOptions::bindingLayout` を渡すと、bind をバインディングレイアウトと照合する (パラメーターの有無、テーブルの範囲と種類、ルート定数に入る数、ルートの SRV / UAV はバッファだけ) |
-| テスト | `tests/test_rendergraph.cpp` (`gfx_tests_unit`、GPU 不要): JSON の往復と診断、ディファードの順序 / 寿命 / バリア、カリングと keep / enabled、order と after と循環、WAR / WAW、UAV バリア、検証のエラー、bind とレイアウトの照合 |
+| コンパイル | `Compiler.h`: 展開 (パラメーターを `CompileOptions::parameters` で上書きし、`when` を評価して、`repeat` を `Name[k]` に展開する) → 検証 → 依存 (サブリソースごとの RAW / WAR / WAW と after) → カリング (インポートへの出力と keep から RAW をさかのぼる。`name@prev` を読むパスが残るなら `name` を書くパスも残す) → 順序 (order と宣言順で並べるトポロジカルソート。循環はエラー) → 寿命 → バリア (サブリソース単位。全体が同じ状態ならまとめる)。一時リソースは最初に使う状態で作る前提で最初のバリアを出さず、インポートと履歴は `Tracked` からの遷移を出す。UAV に続けて書くときは UAV バリアを出す。実行しないパスは理由 (無効 / 条件 / カリング) と一緒に `skipped` に入る |
+| 検証 | 名前の重複、宣言していないリソース、使い方とパスの種類 / リソースの種類 / フォーマット (RTV に深度など)、RTV の番号の重複、DSV は 1 つ、同じパスで読みながら書く、書いていないリソースを読む (エラー)、まだ書かれていない内容を load する (警告)、bind がない / 重なる、mip / スライスの範囲 (インポートとバッファには指定できない、RTV / DSV は mip を 1 つ)、repeat の変数 (repeat のないパスで使う、負になる)、`@prev` (history のリソースだけ、読むだけ)、解決 (Copy のパスだけ、MSAA から MSAA でないものへ)、間接描画の引数 (入力に `IndirectArgs` で書く)、ビューポート / シザーの範囲、キューブ / 3D / MSAA のリソースの制限。`CompileOptions::bindingLayout` を渡すと、bind をバインディングレイアウトと照合する (パラメーターの有無、テーブルの範囲と種類、ルート定数に入る数、ルートの SRV / UAV はバッファだけ) |
+| テスト | `tests/test_rendergraph.cpp` (`gfx_tests_unit`、GPU 不要): JSON の往復と診断、ディファードの順序 / 寿命 / バリア、カリングと keep / enabled、order と after と循環、WAR / WAW、UAV バリア、検証のエラー、bind とレイアウトの照合。手法の例として、カスケードシャドウ、ブルームの mip の連鎖、TAA の履歴、Forward+、MSAA の解決、間接 dispatch、パラメーターと when の切り替え、ビューポートとサブリソースの検証 |
 
 ---
 

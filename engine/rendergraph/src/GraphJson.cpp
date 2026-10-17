@@ -3,6 +3,8 @@
 // ============================================================
 #include "gfx/rendergraph/GraphJson.h"
 
+#include <cctype>
+#include <charconv>
 #include <cmath>
 #include <initializer_list>
 
@@ -18,6 +20,16 @@ const char* nameOf(ResourceKind v)
 	case ResourceKind::Texture:  return "texture";
 	case ResourceKind::Buffer:   return "buffer";
 	case ResourceKind::Imported: return "imported";
+	}
+	return "?";
+}
+const char* nameOf(TextureDimension v)
+{
+	switch (v)
+	{
+	case TextureDimension::Tex2D: return "2d";
+	case TextureDimension::Cube:  return "cube";
+	case TextureDimension::Tex3D: return "3d";
 	}
 	return "?";
 }
@@ -43,6 +55,8 @@ const char* nameOf(Access v)
 	case Access::CopySrc:      return "CopySrc";
 	case Access::CopyDst:      return "CopyDst";
 	case Access::IndirectArgs: return "IndirectArgs";
+	case Access::ResolveSrc:   return "ResolveSrc";
+	case Access::ResolveDst:   return "ResolveDst";
 	}
 	return "?";
 }
@@ -60,11 +74,13 @@ const char* nameOf(ContentKind v)
 {
 	switch (v)
 	{
-	case ContentKind::None:       return "none";
-	case ContentKind::DrawList:   return "drawList";
-	case ContentKind::Fullscreen: return "fullscreen";
-	case ContentKind::Dispatch:   return "dispatch";
-	case ContentKind::Custom:     return "custom";
+	case ContentKind::None:             return "none";
+	case ContentKind::DrawList:         return "drawList";
+	case ContentKind::Fullscreen:       return "fullscreen";
+	case ContentKind::Dispatch:         return "dispatch";
+	case ContentKind::DrawIndirect:     return "drawIndirect";
+	case ContentKind::DispatchIndirect: return "dispatchIndirect";
+	case ContentKind::Custom:           return "custom";
 	}
 	return "?";
 }
@@ -76,8 +92,8 @@ bool parse(const std::string& s, PassType& out)
 }
 bool parse(const std::string& s, Access& out)
 {
-	for (Access v : { Access::SRV, Access::UAV, Access::RTV, Access::DSV, Access::DSVRead,
-	                  Access::CopySrc, Access::CopyDst, Access::IndirectArgs })
+	for (Access v : { Access::SRV, Access::UAV, Access::RTV, Access::DSV, Access::DSVRead, Access::CopySrc,
+	                  Access::CopyDst, Access::IndirectArgs, Access::ResolveSrc, Access::ResolveDst })
 		if (s == nameOf(v)) { out = v; return true; }
 	return false;
 }
@@ -86,6 +102,58 @@ bool parse(const std::string& s, LoadOp& out)
 	for (LoadOp v : { LoadOp::Load, LoadOp::Clear, LoadOp::DontCare })
 		if (s == nameOf(v)) { out = v; return true; }
 	return false;
+}
+bool parse(const std::string& s, TextureDimension& out)
+{
+	for (TextureDimension v : { TextureDimension::Tex2D, TextureDimension::Cube, TextureDimension::Tex3D })
+		if (s == nameOf(v)) { out = v; return true; }
+	return false;
+}
+
+bool parseIndexExpr(const std::string& s, IndexValue& out)
+{
+	// "3" / "i" / "i+1" / "i-2" (空白は許さない)
+	IndexValue v;
+	if (s.empty())
+		return false;
+	const auto isDigit = [](char c) { return c >= '0' && c <= '9'; };
+	if (isDigit(s[0]))
+	{
+		int32_t n = 0;
+		const auto r = std::from_chars(s.data(), s.data() + s.size(), n);
+		if (r.ec != std::errc() || r.ptr != s.data() + s.size())
+			return false;
+		v.value = n;
+		out = v;
+		return true;
+	}
+	size_t i = 0;
+	while (i < s.size() && (std::isalpha(static_cast<unsigned char>(s[i])) || s[i] == '_' || (i > 0 && isDigit(s[i]))))
+		++i;
+	if (i == 0)
+		return false;
+	v.var = s.substr(0, i);
+	if (i < s.size())
+	{
+		if (s[i] != '+' && s[i] != '-')
+			return false;
+		const bool neg = s[i] == '-';
+		int32_t n = 0;
+		const auto r = std::from_chars(s.data() + i + 1, s.data() + s.size(), n);
+		if (r.ec != std::errc() || r.ptr != s.data() + s.size() || i + 1 == s.size())
+			return false;
+		v.add = neg ? -n : n;
+	}
+	out = v;
+	return true;
+}
+
+std::string formatIndexExpr(const IndexValue& v)
+{
+	if (!v.usesVar())
+		return std::to_string(v.value);
+	if (v.add == 0) return v.var;
+	return v.var + (v.add > 0 ? "+" : "-") + std::to_string(v.add > 0 ? v.add : -v.add);
 }
 
 // ============================================================
@@ -103,11 +171,22 @@ GfxJson floatJson(float v)
 	return GfxJson(d);
 }
 
-GfxJson bindJson(const Binding& b, bool withOffset)
+GfxJson indexJson(const IndexValue& v)
+{
+	return v.usesVar() ? GfxJson(formatIndexExpr(v)) : GfxJson(static_cast<int64_t>(v.value));
+}
+
+GfxJson formatJson(GfxFormat f)
+{
+	const char* name = gfxEnumName(gfxEnumInfo<GfxFormat>(), static_cast<uint64_t>(f));
+	return name ? GfxJson(name) : GfxJson(static_cast<uint32_t>(f));
+}
+
+GfxJson bindJson(const Binding& b)
 {
 	GfxJson j = GfxJson::object();
 	j.set("param", static_cast<int64_t>(b.param));
-	if (withOffset && b.offset != 0)
+	if (b.offset != 0)
 		j.set("offset", b.offset);
 	return j;
 }
@@ -126,11 +205,41 @@ GfxJson refJson(const PassResourceRef& r, bool output)
 	j.set("as", accessName(r));
 	if (output && r.load != LoadOp::Load)
 		j.set("load", nameOf(r.load));
+	if (!r.mip.all())
+	{
+		j.set("mip", indexJson(r.mip));
+		if (r.mipCount != 1) j.set("mipCount", r.mipCount);
+	}
+	if (!r.slice.all())
+	{
+		j.set("slice", indexJson(r.slice));
+		if (r.sliceCount != 1) j.set("sliceCount", r.sliceCount);
+	}
+	if (r.viewFormat != GfxFormat::Unknown)
+		j.set("format", formatJson(r.viewFormat));
 	if (r.bind.valid())
-		j.set("bind", bindJson(r.bind, true));
+		j.set("bind", bindJson(r.bind));
 	if (!r.shaderName.empty())
 		j.set("shaderName", r.shaderName);
 	return j;
+}
+
+GfxJson regionJson(const Region& r)
+{
+	GfxJson j = GfxJson::object();
+	if (!r.relative) j.set("relative", false);
+	j.set("x", floatJson(r.x));
+	j.set("y", floatJson(r.y));
+	j.set("width", floatJson(r.width));
+	j.set("height", floatJson(r.height));
+	return j;
+}
+
+GfxJson stringArray(const std::vector<std::string>& v)
+{
+	GfxJson a = GfxJson::array();
+	for (const auto& s : v) a.push(s);
+	return a;
 }
 } // namespace
 
@@ -138,6 +247,14 @@ GfxJson graphToJson(const GraphDesc& g)
 {
 	GfxJson root = GfxJson::object();
 	root.set("version", g.version);
+
+	if (!g.parameters.empty())
+	{
+		GfxJson params = GfxJson::object();
+		for (const auto& p : g.parameters)
+			params.set(p.name, p.isBool ? GfxJson(p.value != 0) : GfxJson(p.value));
+		root.set("parameters", std::move(params));
+	}
 
 	GfxJson resources = GfxJson::object();
 	for (const auto& r : g.resources)
@@ -147,8 +264,9 @@ GfxJson graphToJson(const GraphDesc& g)
 			j.set("kind", nameOf(r.kind));
 		if (r.kind == ResourceKind::Texture)
 		{
-			const char* fmt = gfxEnumName(gfxEnumInfo<GfxFormat>(), static_cast<uint64_t>(r.format));
-			j.set("format", fmt ? GfxJson(fmt) : GfxJson(static_cast<uint32_t>(r.format)));
+			j.set("format", formatJson(r.format));
+			if (r.dimension != TextureDimension::Tex2D)
+				j.set("dimension", nameOf(r.dimension));
 			GfxJson size = GfxJson::object();
 			if (r.size.relative)
 				size.set("relative", floatJson(r.size.scale));
@@ -158,11 +276,15 @@ GfxJson graphToJson(const GraphDesc& g)
 				size.set("height", r.size.height);
 			}
 			j.set("size", std::move(size));
+			if (r.arraySize != 1)   j.set("array", r.arraySize);
+			if (r.depth != 1)       j.set("depth", r.depth);
 			if (r.mipLevels != 1)   j.set("mips", r.mipLevels);
 			if (r.sampleCount != 1) j.set("samples", r.sampleCount);
 		}
 		if (r.kind == ResourceKind::Buffer)
 			j.set("bytes", r.byteSize);
+		if (r.history)
+			j.set("history", true);
 		if (r.clear.hasColor || r.clear.hasDepth)
 		{
 			GfxJson c = GfxJson::object();
@@ -192,15 +314,22 @@ GfxJson graphToJson(const GraphDesc& g)
 		j.set("name", p.name);
 		j.set("type", nameOf(p.type));
 		if (!p.pipeline.empty()) j.set("pipeline", p.pipeline);
-		if (p.order != 0)        j.set("order", static_cast<int64_t>(p.order));
-		if (!p.after.empty())
+		if (!p.when.empty())     j.set("when", p.when);
+		if (p.repeat.set)
 		{
-			GfxJson a = GfxJson::array();
-			for (const auto& s : p.after) a.push(s);
-			j.set("after", std::move(a));
+			GfxJson rep = GfxJson::object();
+			rep.set("count", p.repeat.countParam.empty() ? GfxJson(p.repeat.count) : GfxJson(p.repeat.countParam));
+			if (p.repeat.var != "i")  rep.set("var", p.repeat.var);
+			if (p.repeat.start != 0)  rep.set("start", static_cast<int64_t>(p.repeat.start));
+			j.set("repeat", std::move(rep));
 		}
-		if (p.keep)     j.set("keep", true);
-		if (!p.enabled) j.set("enabled", false);
+		if (!p.view.empty())     j.set("view", p.view);
+		if (p.viewport.set)      j.set("viewport", regionJson(p.viewport));
+		if (p.scissor.set)       j.set("scissor", regionJson(p.scissor));
+		if (p.order != 0)        j.set("order", static_cast<int64_t>(p.order));
+		if (!p.after.empty())    j.set("after", stringArray(p.after));
+		if (p.keep)              j.set("keep", true);
+		if (!p.enabled)          j.set("enabled", false);
 
 		if (!p.constants.empty())
 		{
@@ -210,7 +339,7 @@ GfxJson graphToJson(const GraphDesc& g)
 				GfxJson cj = GfxJson::object();
 				cj.set("source", c.source);
 				if (c.bind.valid())
-					cj.set("bind", bindJson(c.bind, true));
+					cj.set("bind", bindJson(c.bind));
 				if (!c.values.empty())
 				{
 					GfxJson v = GfxJson::array();
@@ -241,13 +370,8 @@ GfxJson graphToJson(const GraphDesc& g)
 		{
 			GfxJson d = GfxJson::object();
 			if (!p.content.drawList.layer.empty()) d.set("layer", p.content.drawList.layer);
-			if (!p.content.drawList.tags.empty())
-			{
-				GfxJson t = GfxJson::array();
-				for (const auto& s : p.content.drawList.tags) t.push(s);
-				d.set("tags", std::move(t));
-			}
-			if (!p.content.drawList.sort.empty()) d.set("sort", p.content.drawList.sort);
+			if (!p.content.drawList.tags.empty())  d.set("tags", stringArray(p.content.drawList.tags));
+			if (!p.content.drawList.sort.empty())  d.set("sort", p.content.drawList.sort);
 			content.set("drawList", std::move(d));
 			break;
 		}
@@ -259,6 +383,21 @@ GfxJson graphToJson(const GraphDesc& g)
 			GfxJson d = GfxJson::array();
 			for (uint32_t v : p.content.dispatch) d.push(v);
 			content.set("dispatch", std::move(d));
+			break;
+		}
+		case ContentKind::DrawIndirect:
+		case ContentKind::DispatchIndirect:
+		{
+			const IndirectSpec& s = p.content.indirect;
+			GfxJson d = GfxJson::object();
+			d.set("args", s.args);
+			if (s.offset != 0) d.set("offset", s.offset);
+			if (p.content.kind == ContentKind::DrawIndirect)
+			{
+				if (!s.count.empty())  d.set("count", s.count);
+				if (s.maxCount != 1)   d.set("maxCount", s.maxCount);
+			}
+			content.set(nameOf(p.content.kind), std::move(d));
 			break;
 		}
 		case ContentKind::Custom:
@@ -363,6 +502,12 @@ public:
 		return true;
 	}
 
+	bool numberKey(const GfxJson& obj, const char* key, const std::string& path, float& out)
+	{
+		const GfxJson* v = obj.find(key);
+		return !v || number(*v, path + "." + key, out);
+	}
+
 	bool stringArray(const GfxJson& obj, const char* key, const std::string& path, std::vector<std::string>& out)
 	{
 		const GfxJson* v = obj.find(key);
@@ -376,6 +521,44 @@ public:
 			out.push_back(v->at(i).asString());
 		}
 		return good;
+	}
+
+	bool format(const GfxJson& v, const std::string& path, GfxFormat& out)
+	{
+		uint64_t value = 0;
+		if (v.isString() && gfxEnumValue(gfxEnumInfo<GfxFormat>(), v.asString().c_str(), value))
+		{
+			out = static_cast<GfxFormat>(value);
+			return true;
+		}
+		if (v.isNumber())
+		{
+			out = static_cast<GfxFormat>(static_cast<uint32_t>(v.asNumber()));
+			return true;
+		}
+		error(path, "フォーマットの名前が必要です (例: R8G8B8A8_Unorm)");
+		return false;
+	}
+
+	// mip / slice: 数値か "i" / "i+1" / "i-1"
+	void index(const GfxJson& obj, const char* key, const std::string& path, IndexValue& out)
+	{
+		const GfxJson* v = obj.find(key);
+		if (!v) return;
+		const std::string p = path + "." + key;
+		if (v->isNumber())
+		{
+			double d = 0;
+			if (integer(*v, p, 0, 65535, d))
+				out = IndexValue::fixed(static_cast<int32_t>(d));
+		}
+		else if (v->isString())
+		{
+			if (!parseIndexExpr(v->asString(), out))
+				error(p, "番号か、repeat の変数を使った式 (\"i\" / \"i+1\" / \"i-1\") が必要です");
+		}
+		else
+			error(p, "番号か、repeat の変数を使った式が必要です");
 	}
 
 	void binding(const GfxJson& obj, const std::string& path, Binding& out)
@@ -393,10 +576,25 @@ public:
 		integerKey(*v, "offset", p, 0, 4294967295.0, out.offset);
 	}
 
+	void region(const GfxJson& obj, const char* key, const std::string& path, Region& out)
+	{
+		const GfxJson* v = obj.find(key);
+		if (!v) return;
+		const std::string p = path + "." + key;
+		if (!v->isObject()) { error(p, "{ \"x\", \"y\", \"width\", \"height\" } が必要です"); return; }
+		checkKeys(*v, p, { "relative", "x", "y", "width", "height" });
+		out.set = true;
+		boolean(*v, "relative", p, out.relative);
+		numberKey(*v, "x", p, out.x);
+		numberKey(*v, "y", p, out.y);
+		numberKey(*v, "width", p, out.width);
+		numberKey(*v, "height", p, out.height);
+	}
+
 	void resourceRef(const GfxJson& v, const std::string& path, bool output, PassResourceRef& out)
 	{
 		if (!v.isObject()) { error(path, "オブジェクトが必要です"); return; }
-		checkKeys(v, path, { "res", "as", "load", "bind", "shaderName" });
+		checkKeys(v, path, { "res", "as", "load", "mip", "mipCount", "slice", "sliceCount", "format", "bind", "shaderName" });
 		str(v, "res", path, out.res, true);
 		std::string as;
 		if (str(v, "as", path, as, true) && !as.empty())
@@ -407,7 +605,8 @@ public:
 				out.rtvIndex = static_cast<uint32_t>(as[3] - '0');
 			}
 			else if (!parse(as, out.as) || out.as == Access::RTV)
-				error(path + ".as", "'" + as + "' は使い方の名前ではありません (SRV / UAV / RTV0〜RTV7 / DSV / DSVRead / CopySrc / CopyDst / IndirectArgs)");
+				error(path + ".as", "'" + as + "' は使い方の名前ではありません (SRV / UAV / RTV0〜RTV7 / DSV / DSVRead / "
+				                    "CopySrc / CopyDst / IndirectArgs / ResolveSrc / ResolveDst)");
 		}
 		std::string load;
 		if (str(v, "load", path, load, false) && !load.empty())
@@ -417,6 +616,12 @@ public:
 			else if (!parse(load, out.load))
 				error(path + ".load", "'" + load + "' は load / clear / dontCare のどれかです");
 		}
+		index(v, "mip", path, out.mip);
+		integerKey(v, "mipCount", path, 1, 16, out.mipCount);
+		index(v, "slice", path, out.slice);
+		integerKey(v, "sliceCount", path, 1, 2048, out.sliceCount);
+		if (const GfxJson* f = v.find("format"))
+			format(*f, path + ".format", out.viewFormat);
 		binding(v, path, out.bind);
 		str(v, "shaderName", path, out.shaderName, false);
 	}
@@ -425,7 +630,7 @@ public:
 	{
 		r.name = name;
 		if (!v.isObject()) { error(path, "オブジェクトが必要です"); return; }
-		checkKeys(v, path, { "kind", "format", "size", "mips", "samples", "bytes", "clear" });
+		checkKeys(v, path, { "kind", "format", "dimension", "size", "array", "depth", "mips", "samples", "bytes", "history", "clear" });
 
 		std::string kind;
 		if (str(v, "kind", path, kind, false) && !kind.empty())
@@ -439,15 +644,10 @@ public:
 			r.kind = ResourceKind::Imported;
 
 		if (const GfxJson* f = v.find("format"))
-		{
-			uint64_t value = 0;
-			if (f->isString() && gfxEnumValue(gfxEnumInfo<GfxFormat>(), f->asString().c_str(), value))
-				r.format = static_cast<GfxFormat>(value);
-			else if (f->isNumber())
-				r.format = static_cast<GfxFormat>(static_cast<uint32_t>(f->asNumber()));
-			else
-				error(path + ".format", "フォーマットの名前が必要です (例: R8G8B8A8_Unorm)");
-		}
+			format(*f, path + ".format", r.format);
+		std::string dim;
+		if (str(v, "dimension", path, dim, false) && !dim.empty() && !parse(dim, r.dimension))
+			error(path + ".dimension", "'" + dim + "' は 2d / cube / 3d のどれかです");
 		if (const GfxJson* s = v.find("size"))
 		{
 			const std::string sp = path + ".size";
@@ -469,9 +669,12 @@ public:
 				}
 			}
 		}
+		integerKey(v, "array", path, 1, 2048, r.arraySize);
+		integerKey(v, "depth", path, 1, 2048, r.depth);
 		integerKey(v, "mips", path, 1, 16, r.mipLevels);
 		integerKey(v, "samples", path, 1, 32, r.sampleCount);
 		integerKey(v, "bytes", path, 0, 9007199254740991.0, r.byteSize);
+		boolean(v, "history", path, r.history);
 
 		if (const GfxJson* c = v.find("clear"))
 		{
@@ -498,22 +701,67 @@ public:
 		}
 	}
 
+	void indirect(const GfxJson& v, const std::string& path, bool draw, IndirectSpec& out)
+	{
+		if (!v.isObject()) { error(path, "{ \"args\": バッファ, \"offset\": バイト } が必要です"); return; }
+		if (draw) checkKeys(v, path, { "args", "offset", "count", "maxCount" });
+		else      checkKeys(v, path, { "args", "offset" });
+		str(v, "args", path, out.args, true);
+		integerKey(v, "offset", path, 0, 9007199254740991.0, out.offset);
+		if (draw)
+		{
+			str(v, "count", path, out.count, false);
+			integerKey(v, "maxCount", path, 1, 1048576, out.maxCount);
+		}
+	}
+
 	void pass(const GfxJson& v, const std::string& basePath, PassDesc& p)
 	{
 		if (!v.isObject()) { error(basePath, "オブジェクトが必要です"); return; }
 		str(v, "name", basePath, p.name, true);
 		const std::string path = p.name.empty() ? basePath : "passes[" + p.name + "]";
-		checkKeys(v, path, { "name", "type", "pipeline", "order", "after", "keep", "enabled",
-		                     "constants", "inputs", "outputs", "content" });
+		checkKeys(v, path, { "name", "type", "pipeline", "when", "repeat", "view", "viewport", "scissor", "order",
+		                     "after", "keep", "enabled", "constants", "inputs", "outputs", "content" });
 
 		std::string type;
 		if (str(v, "type", path, type, true) && !type.empty() && !parse(type, p.type))
-			error(path + ".type", "'" + type + "' は Raster / Compute / Copy のどれかです");
+		{
+			if (type == "RayTrace" || type == "Subgraph")
+				error(path + ".type", type + " のパスは名前と意味だけを決めてあり、まだ使えません");
+			else
+				error(path + ".type", "'" + type + "' は Raster / Compute / Copy のどれかです");
+		}
 		str(v, "pipeline", path, p.pipeline, false);
+		str(v, "when", path, p.when, false);
+		str(v, "view", path, p.view, false);
+		region(v, "viewport", path, p.viewport);
+		region(v, "scissor", path, p.scissor);
 		integerKey(v, "order", path, -2147483648.0, 2147483647.0, p.order);
 		stringArray(v, "after", path, p.after);
 		boolean(v, "keep", path, p.keep);
 		boolean(v, "enabled", path, p.enabled);
+
+		if (const GfxJson* rep = v.find("repeat"))
+		{
+			const std::string rp = path + ".repeat";
+			if (!rep->isObject()) error(rp, "{ \"count\": 回数かパラメーター, \"var\": 変数, \"start\": 最初の値 } が必要です");
+			else
+			{
+				checkKeys(*rep, rp, { "count", "var", "start" });
+				p.repeat.set = true;
+				const GfxJson* count = rep->find("count");
+				if (!count) error(rp + ".count", "必要な項目がありません");
+				else if (count->isString()) p.repeat.countParam = count->asString();
+				else
+				{
+					double d = 0;
+					if (integer(*count, rp + ".count", 0, 4096, d))
+						p.repeat.count = static_cast<uint32_t>(d);
+				}
+				str(*rep, "var", rp, p.repeat.var, false);
+				integerKey(*rep, "start", rp, -65536, 65536, p.repeat.start);
+			}
+		}
 
 		if (const GfxJson* arr = v.find("constants"))
 		{
@@ -561,7 +809,7 @@ public:
 			const std::string cp = path + ".content";
 			if (!c->isObject() || c->size() != 1)
 			{
-				error(cp, "drawList / fullscreen / dispatch / custom のどれか 1 つを持つオブジェクトが必要です");
+				error(cp, "drawList / fullscreen / dispatch / drawIndirect / dispatchIndirect / custom のどれか 1 つを持つオブジェクトが必要です");
 				return;
 			}
 			const std::string& kind = c->keys()[0];
@@ -591,6 +839,12 @@ public:
 						p.content.dispatch[i] = static_cast<uint32_t>(d);
 				}
 			}
+			else if (kind == "drawIndirect" || kind == "dispatchIndirect")
+			{
+				const bool draw = kind == "drawIndirect";
+				p.content.kind = draw ? ContentKind::DrawIndirect : ContentKind::DispatchIndirect;
+				indirect(val, cp + "." + kind, draw, p.content.indirect);
+			}
 			else if (kind == "custom")
 			{
 				p.content.kind = ContentKind::Custom;
@@ -598,7 +852,7 @@ public:
 				else p.content.custom = val.asString();
 			}
 			else
-				error(cp + "." + kind, "知らない内容です (drawList / fullscreen / dispatch / custom)");
+				error(cp + "." + kind, "知らない内容です (drawList / fullscreen / dispatch / drawIndirect / dispatchIndirect / custom)");
 		}
 	}
 
@@ -618,10 +872,31 @@ bool graphFromJson(const GfxJson& json, GraphDesc& out, GfxJsonDiagnostics* diag
 		r.error("(root)", "グラフの JSON はオブジェクトです");
 		return false;
 	}
-	r.checkKeys(json, "(root)", { "version", "resources", "passes" });
+	r.checkKeys(json, "(root)", { "version", "parameters", "resources", "passes" });
 	r.integerKey(json, "version", "(root)", 1, 1000000, out.version);
 	if (out.version > 1)
 		r.warning("version", "新しい形式 (version " + std::to_string(out.version) + ") のグラフです。知らない項目は無視します");
+
+	if (const GfxJson* params = json.find("parameters"))
+	{
+		if (!params->isObject()) r.error("parameters", "オブジェクト ({ 名前: true / false / 整数 }) が必要です");
+		else
+			for (size_t i = 0; i < params->keys().size(); ++i)
+			{
+				Parameter p;
+				p.name = params->keys()[i];
+				const GfxJson& v = params->valueAt(i);
+				const std::string pp = "parameters." + p.name;
+				if (v.isBool()) { p.isBool = true; p.value = v.asBool() ? 1 : 0; }
+				else
+				{
+					double num = 0;
+					if (!r.integer(v, pp, -2147483648.0, 2147483647.0, num)) continue;
+					p.value = static_cast<int64_t>(num);
+				}
+				out.parameters.push_back(std::move(p));
+			}
+	}
 
 	if (const GfxJson* res = json.find("resources"))
 	{

@@ -4,15 +4,19 @@
 //
 //  グラフ (GraphDesc) のコンパイル。GPU を使わない (単体テストできる)。
 //
-//    1. 検証      : 名前、リソースの宣言、使い方とパスの種類、フォーマット、同じパスでの読み書き、bind
-//    2. 依存      : パスの宣言順で、各リソースを誰が書き誰が読むかをたどり、
+//    0. 展開      : パラメーター (options で上書きできる) で when を評価し、repeat のパスを
+//                   "Name[0]"、"Name[1]" … に展開する (mip / slice / view の変数を値に置き換える)
+//    1. 検証      : 名前、リソースの宣言、使い方とパスの種類、フォーマット、サブリソースの範囲、
+//                   同じサブリソースを同じパスで読みながら書かないか、bind
+//    2. 依存      : パスの宣言順で、サブリソース (mip とスライス) ごとに誰が書き誰が読むかをたどり、
 //                   書いた → 読む (RAW)、読む → 書く (WAR)、書く → 書く (WAW) の依存を作る。after も依存に加える
 //    3. カリング  : インポート ($ で始まる名前) に書くパスと keep のパスから、RAW の依存をさかのぼって
-//                   必要なパスを決める。それ以外は除く (culled。エディターでは灰色で表示する)
+//                   必要なパスを決める。前フレームの内容 (name@prev) を読むパスが残るなら、name を書くパスも残す
 //    4. 順序      : 依存を保ったまま、order の小さい順 (同じなら宣言順) に並べる (トポロジカルソート)
-//    5. 寿命      : 一時リソースを最初と最後に使うパス
-//    6. バリア    : パスの前に必要な状態遷移。一時リソースは最初に使う状態で作るので、最初はバリアなし。
-//                   インポートは最初に before = Tracked (エンジンの状態追跡の値) からの遷移を出す。
+//    5. 寿命      : リソースを最初と最後に使うパス
+//    6. バリア    : パスの前に必要な状態遷移 (サブリソース単位。全体が同じならまとめる)。
+//                   一時リソースは最初に使う状態で作るので、最初はバリアなし。
+//                   インポートと履歴のリソースは、最初に before = Tracked (エンジンの状態追跡の値) からの遷移を出す。
 //                   UAV に続けて書くときは UAV バリアを出す
 //
 //  bind の検証: options.bindingLayout にパイプライン → バインディングレイアウトを引く関数を渡すと、
@@ -23,6 +27,7 @@
 #include "gfx/rendergraph/GraphDesc.h"
 
 #include <functional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -32,7 +37,7 @@ struct Diagnostic
 {
 	enum class Severity { Error, Warning };
 	Severity    severity = Severity::Error;
-	std::string path;      // "passes[Lighting].inputs[0].bind" など
+	std::string path;      // "passes[Lighting].inputs[0].bind"、繰り返しは "passes[Shadow[2]]..."
 	std::string message;
 
 	std::string text() const { return path.empty() ? message : path + ": " + message; }
@@ -41,17 +46,20 @@ struct Diagnostic
 // パスの前に記録するバリア
 struct BarrierOp
 {
-	uint32_t         resource = 0;   // CompiledGraph::resources の位置
-	GfxBarrierType   type     = GfxBarrierType::Transition;
-	GfxResourceState before   = GfxResourceState::Common;   // Tracked = エンジンの状態追跡の値 (インポートの最初)
-	GfxResourceState after    = GfxResourceState::Common;
+	uint32_t         resource    = 0;   // CompiledGraph::resources の位置
+	GfxBarrierType   type        = GfxBarrierType::Transition;
+	GfxResourceState before      = GfxResourceState::Common;   // Tracked = エンジンの状態追跡の値 (インポート / 履歴の最初)
+	GfxResourceState after       = GfxResourceState::Common;
+	uint32_t         subresource = GFX_ALL_SUBRESOURCES;       // mip + slice * mipLevels (全体なら GFX_ALL_SUBRESOURCES)
 };
 
 struct CompiledPass
 {
-	uint32_t               passIndex = 0;   // GraphDesc::passes の位置
-	std::string            name;
-	std::vector<BarrierOp> barriers;        // このパスの前に記録する
+	uint32_t               passIndex = 0;     // GraphDesc::passes の位置 (繰り返しは同じ位置)
+	std::string            name;              // 繰り返しは "Name[k]"
+	int32_t                iteration = -1;    // repeat の変数の値 (繰り返しでなければ -1)
+	PassDesc               desc;              // mip / slice / view の変数を値に置き換えた記述 (repeat / when は消してある)
+	std::vector<BarrierOp> barriers;          // このパスの前に記録する
 };
 
 struct ResourceInfo
@@ -59,36 +67,53 @@ struct ResourceInfo
 	std::string      name;
 	ResourceKind     kind      = ResourceKind::Texture;
 	int32_t          descIndex = -1;    // GraphDesc::resources の位置 (宣言していないインポートは -1)
+	int32_t          historyOf = -1;    // name@prev のとき、元のリソースの CompiledGraph::resources の位置
+	uint32_t         mips      = 1;     // サブリソースの数 = mips * layers
+	uint32_t         layers    = 1;
 	int32_t          firstPass = -1;    // 最初に使う CompiledGraph::passes の位置 (使わなければ -1)
 	int32_t          lastPass  = -1;
 	GfxResourceState initialState = GfxResourceState::Common;   // 一時リソースを作るときの状態 (最初に使う状態)
-	GfxResourceState finalState   = GfxResourceState::Common;   // 最後のパスのあとの状態
+	GfxResourceState finalState   = GfxResourceState::Common;   // 最後のパスのあとの状態 (サブリソース 0)
+	bool             finalUniform = true;                       // 最後にすべてのサブリソースが同じ状態か
 	bool             written      = false;
 
-	bool used() const { return firstPass >= 0; }
+	bool used() const     { return firstPass >= 0; }
 	bool imported() const { return kind == ResourceKind::Imported; }
+	bool isPrev() const   { return historyOf >= 0; }
+};
+
+// 実行しないパス
+struct SkippedPass
+{
+	enum class Reason { Disabled, Condition, Culled };
+	std::string name;
+	uint32_t    passIndex = 0;
+	Reason      reason    = Reason::Culled;
 };
 
 struct CompiledGraph
 {
-	bool                      ok = false;   // エラーがなければ true (警告はあってよい)
-	std::vector<CompiledPass> passes;       // 実行する順
-	std::vector<uint32_t>     culled;       // 除いたパス (GraphDesc::passes の位置)
-	std::vector<uint32_t>     disabled;     // enabled = false のパス
-	std::vector<ResourceInfo> resources;    // 宣言したリソース + 参照されたインポート
-	std::vector<Diagnostic>   diagnostics;
+	bool                           ok = false;   // エラーがなければ true (警告はあってよい)
+	std::vector<CompiledPass>      passes;       // 実行する順
+	std::vector<SkippedPass>       skipped;      // 無効 / 条件が偽 / 結果に届かない (エディターでは灰色で表示する)
+	std::vector<ResourceInfo>      resources;    // 宣言したリソース + 参照されたインポートと name@prev
+	std::map<std::string, int64_t> parameters;   // 使ったパラメーターの値 (上書きを反映済み)
+	std::vector<Diagnostic>        diagnostics;
 
-	std::vector<Diagnostic> errors() const;
-	std::vector<Diagnostic> warnings() const;
-	const ResourceInfo*     findResource(const std::string& name) const;
-	int32_t                 indexOfPass(const std::string& name) const;   // passes の位置 (なければ -1)
-	bool                    isCulled(uint32_t passIndex) const;
+	std::vector<Diagnostic>  errors() const;
+	std::vector<Diagnostic>  warnings() const;
+	const ResourceInfo*      findResource(const std::string& name) const;
+	int32_t                  indexOfPass(const std::string& name) const;   // passes の位置 (なければ -1)
+	std::vector<std::string> skippedNames(SkippedPass::Reason reason) const;
 };
 
 struct CompileOptions
 {
 	// パイプラインのアセット → バインディングレイアウト。nullptr を返したら、そのパスの bind は詳しく確かめない
 	std::function<const GfxBindingLayoutDesc*(const std::string& pipeline)> bindingLayout;
+
+	// パラメーターの上書き (bool は 0 / 1)
+	std::map<std::string, int64_t> parameters;
 };
 
 CompiledGraph compile(const GraphDesc& graph, const CompileOptions& options = {});
