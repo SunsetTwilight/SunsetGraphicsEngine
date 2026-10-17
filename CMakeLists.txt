@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(SunsetGraphicsEngine VERSION 0.2.1 LANGUAGES CXX)
+project(SunsetGraphicsEngine VERSION 0.3.0 LANGUAGES CXX)
 
 # ============================================================
 #  ディレクトリ構成と依存の向き

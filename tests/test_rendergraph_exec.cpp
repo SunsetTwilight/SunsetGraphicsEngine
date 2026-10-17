@@ -118,6 +118,30 @@ const char* k_Graph = R"json({
   ]
 })json";
 
+const char* k_DepthOnlyPipeline = R"json({
+  "shaders": { "vs": { "file": "shaders/fullscreen.vs.hlsl" } },
+  "layout": {},
+  "state": { "rasterizerState": { "cullMode": "None" } }
+})json";
+
+const char* k_OverlayPipeline = R"json({
+  "shaders": { "vs": { "file": "shaders/fullscreen.vs.hlsl" }, "ps": { "file": "shaders/solid.ps.hlsl" } },
+  "layout": {},
+  "state": { "rasterizerState": { "cullMode": "None" }, "depthStencilState": { "depthFunc": "LessEqual", "depthWriteMask": "Zero" } }
+})json";
+
+// 深度を DSV と DSVRead だけで使う (SRV で読まない) グラフ
+const char* k_DepthReadGraph = R"json({
+  "resources": { "depth": { "format": "D32_Float", "size": { "relative": 1.0 }, "clear": { "depth": 1.0 } } },
+  "passes": [
+    { "name": "Z", "type": "Raster", "pipeline": "pipelines/depthonly.json",
+      "outputs": [ { "res": "depth", "as": "DSV", "load": "clear" } ], "content": { "fullscreen": true } },
+    { "name": "Overlay", "type": "Raster", "pipeline": "pipelines/overlay.json",
+      "inputs": [ { "res": "depth", "as": "DSVRead" } ],
+      "outputs": [ { "res": "$out", "as": "RTV0", "load": "dontCare" } ], "content": { "fullscreen": true } }
+  ]
+})json";
+
 std::filesystem::path writeAssets()
 {
 	const auto root = std::filesystem::temp_directory_path() / "gfx_tests_rendergraph_exec";
@@ -129,6 +153,9 @@ std::filesystem::path writeAssets()
 	writeFile(root / "pipelines" / "fill.json", k_FillPipeline);
 	writeFile(root / "pipelines" / "mrt.json", k_MrtPipeline);
 	writeFile(root / "pipelines" / "show.json", k_ShowPipeline);
+	writeFile(root / "shaders" / "solid.ps.hlsl", "float4 main() : SV_Target { return float4(1, 1, 1, 1); }");
+	writeFile(root / "pipelines" / "depthonly.json", k_DepthOnlyPipeline);
+	writeFile(root / "pipelines" / "overlay.json", k_OverlayPipeline);
 	writeFile(root / "pipelines" / "broken.json", "{ \"shaders\": { \"vs\": { \"file\": 3 } }, \"state\": { \"rasterizerState\": { \"cullMode\": \"Sideways\" } } }");
 	return root;
 }
@@ -310,6 +337,24 @@ TEST_CASE("レンダーグラフの実行: Compute / MRT / 合成を記録して
 		REQUIRE(rg::pipelineAssetFromJson(savedJson, reread));
 		CHECK(reread.layout.ranges[0].numDescriptors == 5);
 		CHECK(reread.state.rasterizerState.cullMode == GfxCullMode::Back);
+
+		// 深度を SRV で読まないグラフでも、DSVRead (DepthRead) に遷移できる
+		{
+			rg::GraphDesc g2;
+			REQUIRE(rg::graphFromString(k_DepthReadGraph, g2));
+			const rg::CompiledGraph c2 = rg::compile(g2, options);
+			for (const auto& d : c2.diagnostics) MESSAGE(d.text());
+			REQUIRE(c2.ok);
+			for (int i = 0; i < 3; ++i)
+			{
+				ICommandBuffer* cb2 = engine.allocCommandBuffer();
+				cb2->begin();
+				CHECK(executor.record(cb2, g2, c2, in));
+				cb2->end();
+				engine.submitCommandBuffers({ cb2 });
+				cb2->release();
+			}
+		}
 
 		// アプリが渡していないインポートは、何も記録せずにエラー
 		rg::FrameInputs missing = in;

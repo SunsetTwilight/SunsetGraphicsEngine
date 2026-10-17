@@ -464,6 +464,7 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 | `PipelineLibrary` | `pipelines/*.json` を読み、バインディングレイアウトとパイプラインを作る。同じアセットと同じ出力のフォーマットなら作成済みのものを返す。シェーダーは `ShaderLibrary` で作るので、`.hlsl` の保存で作り直される。コンパイルの bind の検証にもレイアウトを渡す (`bindingLayout(path)`) |
 | `Executor` | 一時リソースのプール (大きさ / フォーマット / 使い方が同じものを再利用し、3 フレーム使わなければ破棄)、バリアの発行 (一時リソースは毎フレーム最初に作成時の状態へ戻す)、出力の設定とクリア、ビューポート / シザー、bind どおりのテーブル / ルート CBV / ルート定数、内容 (drawList / fullscreen / dispatch / drawIndirect / dispatchIndirect / custom / コピー / MSAA の解決)、パスごとのイベントとタイムスタンプ (4 フレームのリングで読み出す) |
 | アプリとの境界 | `FrameInputs` (基準の大きさ、`$` のリソース、`IDrawListProvider`)。`$backbuffer` などは `ImportedResource` (IRenderTarget / IDepthStencil / v2 テクスチャ / バッファ) で渡す |
+| 一時リソース | テクスチャは常に SRV 付きで作る (DSVRead の DepthRead はシェーダーから読める状態を含むので、DSV だけで使う深度でも必要。M3d で見つけて修正) |
 | 制限 | サブリソース単位のバリアになるグラフ、`history` / `@prev`、IRenderTarget で渡した出力とグラフのテクスチャを同じパスに混ぜること、Sampler のテーブル (静的サンプラーを使う) は、まだ実行できない (`record` がエラーを返す)。必要になった時点 (ブルームや TAA を使うとき) で対応する |
 | サンプル | `samples/rendergraph` (`GfxGraphSample`): `assets/graphs/deferred.json` (G-Buffer → ライティング → 合成) を描く。Debug + デバッグレイヤー + GBV で D3D12 のメッセージ 0 件 (通常 / リサイズ / 最小化 / 復帰)。GPU 時間を 120 フレームごとに出力する (RTX 3060 Laptop の Release で 3 パス合計 約 0.17 ms) |
 | テスト | `tests/test_rendergraph_exec.cpp` (`gfx_tests_render`、GPU / WARP): パイプラインのアセットの JSON と診断、Compute (ルート定数 + UAV) → MRT と深度 → 4 枚を SRV で読んで合成、一時リソースの再利用と大きさの変更、出力のフォーマットごとのパイプライン、GPU 時間、渡していないインポートと読めないアセットのエラー、D3D12 のメッセージ 0 件 |
@@ -489,6 +490,14 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 | コンパイル | `Compiler.h`: 展開 (パラメーターを `CompileOptions::parameters` で上書きし、`when` を評価して、`repeat` を `Name[k]` に展開する) → 検証 → 依存 (サブリソースごとの RAW / WAR / WAW と after) → カリング (インポートへの出力と keep から RAW をさかのぼる。`name@prev` を読むパスが残るなら `name` を書くパスも残す) → 順序 (order と宣言順で並べるトポロジカルソート。循環はエラー) → 寿命 → バリア (サブリソース単位。全体が同じ状態ならまとめる)。一時リソースは最初に使う状態で作る前提で最初のバリアを出さず、インポートと履歴は `Tracked` からの遷移を出す。UAV に続けて書くときは UAV バリアを出す。実行しないパスは理由 (無効 / 条件 / カリング) と一緒に `skipped` に入る |
 | 検証 | 名前の重複、宣言していないリソース、使い方とパスの種類 / リソースの種類 / フォーマット (RTV に深度など)、RTV の番号の重複、DSV は 1 つ、同じパスで読みながら書く、書いていないリソースを読む (エラー)、まだ書かれていない内容を load する (警告)、bind がない / 重なる、mip / スライスの範囲 (インポートとバッファには指定できない、RTV / DSV は mip を 1 つ)、repeat の変数 (repeat のないパスで使う、負になる)、`@prev` (history のリソースだけ、読むだけ)、解決 (Copy のパスだけ、MSAA から MSAA でないものへ)、間接描画の引数 (入力に `IndirectArgs` で書く)、ビューポート / シザーの範囲、キューブ / 3D / MSAA のリソースの制限。`CompileOptions::bindingLayout` を渡すと、bind をバインディングレイアウトと照合する (パラメーターの有無、テーブルの範囲と種類、ルート定数に入る数、ルートの SRV / UAV はバッファだけ) |
 | テスト | `tests/test_rendergraph.cpp` (`gfx_tests_unit`、GPU 不要): JSON の往復と診断、ディファードの順序 / 寿命 / バリア、カリングと keep / enabled、order と after と循環、WAR / WAW、UAV バリア、検証のエラー、bind とレイアウトの照合。手法の例として、カスケードシャドウ、ブルームの mip の連鎖、TAA の履歴、Forward+、MSAA の解決、間接 dispatch、パラメーターと when の切り替え、ビューポートとサブリソースの検証 |
+
+
+#### M3d の実装状況 (完了、SunsetStudio)
+
+SunsetEditor のビューポートを、`editor/assets/graphs/viewport.json` (GBuffer → Lighting → Grid → Composite) で描く。
+レンダーグラフのパネルにパスの一覧 (実行順、GPU 時間、実行しない理由) とリソースを出し、インスペクターでパス (有効 / 無効、パイプライン、
+入力と出力、bind)、リソース (フォーマット、大きさ)、パイプライン (ステート) を編集して、その場で反映し、保存できる。
+詳細は SunsetStudio の [docs/design/editor-shell.md](https://github.com/SunsetTwilight/SunsetStudio/blob/main/docs/design/editor-shell.md) の「M3d の実装状況」。
 
 ---
 
@@ -517,18 +526,18 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 
 ## 実装順序と完了条件
 
-M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0) と M2a〜M2c (エディターの骨格、ビューポート、インスペクター) は完了した。以降はマイルストーン (M) 単位で進める。
+M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0)、M2a〜M2c (エディターの骨格、ビューポート、インスペクター)、M3 (Phase 3、レンダーグラフ、v0.3.0) は完了した。以降はマイルストーン (M) 単位で進める。
 
 | マイルストーン | 内容 | 完了条件 |
 |---------------|------|---------|
 | ~~M0~~ | doctest のテスト、GitHub Actions (WARP)、v0.1.0 のタグ | 完了 |
 | ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
 | ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b で入れた (パスごとの GPU 時間) |
-| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a (データ、JSON、コンパイル)、M3b (PipelineLibrary、Executor、GPU 時間)、M3c (保存とホットリロード) は完了 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
+| ~~M3 (Phase 3)~~ | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a〜M3d (データ、コンパイル、実行、保存とホットリロード、エディター) は完了 (v0.3.0) | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
 | M4 | エディターの MVP(グラフ編集、リソースビューアー、Undo/Redo) | ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 
-完了済みの Phase:1、2a、2b、2c。
+完了済みの Phase:1、2a、2b、2c、3。
 
 ## 未解決の論点
 

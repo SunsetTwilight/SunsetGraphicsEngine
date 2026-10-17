@@ -475,8 +475,10 @@ bool Executor::Impl::prepare(const GraphDesc& graph, const CompiledGraph& c, con
 			continue;
 		}
 
-		// テクスチャ: 使い方から作成のフラグを決める
-		GfxTextureUsage usage = GfxTextureUsage::None;
+		// テクスチャ: 使い方から作成のフラグを決める。SRV は常に付ける
+		// (DSVRead の DepthRead はシェーダーから読める状態を含むので、DENY_SHADER_RESOURCE だと遷移できない。
+		//  グラフの編集でパスが減っても、同じ大きさなら同じテクスチャを使い続けられる)
+		GfxTextureUsage usage = GfxTextureUsage::ShaderResource;
 		for (const auto& p : c.passes)
 			for (const auto* refs : { &p.desc.inputs, &p.desc.outputs })
 				for (const auto& ref : *refs)
