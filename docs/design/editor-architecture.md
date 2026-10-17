@@ -297,6 +297,77 @@ Graph
 }
 ```
 
+### M3 の詳細設計 (2026-10-17 決定)
+
+#### 決定事項
+
+| 論点 | 決定 | 内容 |
+|------|------|------|
+| シーンの表現 | **コールバック方式** | パスの `content.drawList` は問い合わせ (レイヤー、タグによる絞り込み、ソート方法) だけを持つ。実際の描画は、アプリが渡す `IDrawListProvider` が行う。エンジンはシーンのデータ構造を持たないので、ECS にするかリストにするかはアプリ側で後から決められる |
+| 入力とシェーダーのつなぎ方 | **ファイルに明示的に保存する (読み書きできる)** | パスの入力と定数ごとに、バインディングレイアウトのどこにつなぐか (`bind: { param, offset }`) をグラフの JSON に書く。実行時はこの指定だけを使う。エディターはシェーダーのリフレクションで候補を出したり自動で埋めたりして、その結果をファイルに書き込む。`shaderName` を書いておくと、リフレクションと照合し、違っていれば警告する |
+| アセットの参照 | **ファイルのパス** | プロジェクトのフォルダからの相対パス (区切りは `/`)。例: `"pipelines/gbuffer.json"`。名前を変えたら参照も直す (エディターでの一括置換は M4) |
+| 統計 (M2d) | **M3b に含める** | パスごとの GPU 時間は、レンダーグラフの実行がパスの境界にタイムスタンプを入れて測るのが自然なので、M3b で入れる |
+
+#### アセット
+
+- **シェーダー**: `.hlsl` のファイル。エントリーポイントとマクロはパイプラインのアセットで指定する。
+- **パイプライン** (`pipelines/*.json`): シェーダーのファイル、バインディングレイアウト (`GfxBindingLayoutDesc` の JSON)、ステート (`GfxGraphicsPipelineDesc` の JSON。ハンドルは含めない)。
+  RTV / DSV のフォーマットと枚数は、それを使うパスの出力から決める (G-Buffer のフォーマットをグラフで変えても、パイプラインを直さなくてよい)。
+- **グラフ** (`graphs/*.json`): リソースとパス。
+
+```json
+{
+  "version": 1,
+  "resources": {
+    "gbAlbedo": { "format": "R8G8B8A8_Unorm",     "size": { "relative": 1.0 } },
+    "gbNormal": { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 } },
+    "depth":    { "format": "D32_Float",          "size": { "relative": 1.0 }, "clear": { "depth": 1.0 } }
+  },
+  "passes": [
+    { "name": "GBuffer", "type": "Raster", "pipeline": "pipelines/gbuffer.json",
+      "constants": [ { "source": "frame", "bind": { "param": 0 } } ],
+      "outputs": [ { "res": "gbAlbedo", "as": "RTV0", "load": "clear" },
+                   { "res": "gbNormal", "as": "RTV1", "load": "clear" },
+                   { "res": "depth",    "as": "DSV",  "load": "clear" } ],
+      "content": { "drawList": { "layer": "Opaque", "sort": "frontToBack" } } },
+    { "name": "Lighting", "type": "Raster", "pipeline": "pipelines/deferred_light.json",
+      "constants": [ { "source": "frame", "bind": { "param": 0 } } ],
+      "inputs":  [ { "res": "gbAlbedo", "as": "SRV", "bind": { "param": 1, "offset": 0 }, "shaderName": "gAlbedo" },
+                   { "res": "gbNormal", "as": "SRV", "bind": { "param": 1, "offset": 1 }, "shaderName": "gNormal" },
+                   { "res": "depth",    "as": "SRV", "bind": { "param": 1, "offset": 2 }, "shaderName": "gDepth" } ],
+      "outputs": [ { "res": "$backbuffer", "as": "RTV0", "load": "dontCare" } ],
+      "content": { "fullscreen": true } }
+  ]
+}
+```
+
+- 同じ `param` (ディスクリプタテーブル) につながる入力は、`offset` の位置に並べた 1 つのテーブルとして設定する。
+- `constants.source` は、アプリが名前で渡す定数バッファ (`frame` など) か、JSON に書いた値 (`inline`)。
+- `$backbuffer` などの `$` で始まる名前は、実行時にアプリが渡すインポートのリソース。
+
+#### 構成 (エンジンの `engine/rendergraph/`、ターゲット `SunsetGraphicsEngine::rendergraph`)
+
+C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だけを使うので、DLL の境界の外にあり、ABI の網羅性を確かめる利用者にもなる。
+
+| 部品 | 役割 | GPU |
+|------|------|-----|
+| `GraphDesc` | グラフのデータ。JSON と相互に変換する (M1 の `GfxJson` を使う) | 不要 |
+| `compile()` | 順序 (トポロジカルソートと `order`)、カリング、寿命の解析、バリアの計画、`bind` の検証 | 不要 (単体テストできる) |
+| `AssetLibrary` | パイプライン / シェーダーのアセットを読み込み、作成済みのものを再利用する。ファイルの変更で作り直す (`ShaderLibrary` を使う) | 必要 |
+| `Executor` | 一時リソースのプール (大きさとフォーマットで再利用)、バリアの発行、パスの記録、パスごとのタイムスタンプ | 必要 |
+| `IDrawListProvider` | アプリが実装する。`draw(query, ctx)` で描画を記録し、`constants(name)` で定数バッファを返す | — |
+
+#### 段階と完了条件
+
+| 段階 | 場所 | 内容 | 完了条件 |
+|------|------|------|---------|
+| **M3a** コア | エンジン | `GraphDesc`、`compile()` | GPU を使わない単体テストで、順序、カリング、寿命、バリアの計画、`bind` の検証が正しい |
+| **M3b** 実行 | エンジン | `AssetLibrary`、`Executor` (Raster / Fullscreen / Compute)、パスごとの GPU 時間 (M2d) | サンプルのディファード (G-Buffer → ライティング → 合成) をグラフで描け、D3D12 のメッセージが 0 件 |
+| **M3c** 保存とホットリロード | エンジン | グラフとパイプラインのアセットの JSON の読み書き、ファイルの変更での作り直し | JSON を編集すると、サンプルの描画がその場で変わる |
+| **M3d** エディター | Studio | ビューポートをグラフで描く。アウトライナーにパスの一覧と GPU 時間、インスペクターでパスのパイプラインとつなぎ方を編集する | エディターで G-Buffer の構成や合成のブレンドを変え、すぐ反映される |
+
+ノードエディター (React Flow でグラフを線でつないで編集する UI) は M4。
+
 ---
 
 ## Phase 4:エディター
@@ -324,14 +395,14 @@ Graph
 
 ## 実装順序と完了条件
 
-M0 (テスト、CI、v0.1.0 のタグ) と M1 (Phase 2c、v0.2.0) は完了した。以降はマイルストーン (M) 単位で進める。
+M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0) と M2a〜M2c (エディターの骨格、ビューポート、インスペクター) は完了した。以降はマイルストーン (M) 単位で進める。
 
 | マイルストーン | 内容 | 完了条件 |
 |---------------|------|---------|
 | ~~M0~~ | doctest のテスト、GitHub Actions (WARP)、v0.1.0 のタグ | 完了 |
 | ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
-| M2 (Studio) | エディターの骨格 (webview、Bridge、ビューポート、インスペクター、統計)。段階 M2a〜M2d は editor-shell.md を参照 | M2a/M2b は M1 と並行できる。M2c は M1 の JSON の往復に依存する |
-| M3 (Phase 3a/3b) | レンダーグラフのコア、サンプルのディファードをグラフに移行、JSON の保存と読み込み | グラフからサンプルと同じ画が出る。バリアが自動で生成される |
+| ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b に含める |
+| M3 (Phase 3) | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」 | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
 | M4 | エディターの MVP(グラフ編集、リソースビューアー、Undo/Redo) | ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 
@@ -339,7 +410,7 @@ M0 (テスト、CI、v0.1.0 のタグ) と M1 (Phase 2c、v0.2.0) は完了し�
 
 ## 未解決の論点
 
-- **シーンの表現**:DrawList のクエリが参照するシーンのデータ構造(ECS にするか、単純なリストにするか)をまだ決めていない。
+- ~~**シーンの表現**~~:コールバック方式に決めた (M3 の詳細設計)。シーンのデータ構造 (ECS かリストか) はアプリ側で決める。
 - **マテリアルシステム**:パイプラインアセットとマテリアルパラメータをどう分けるか、インスタンス化の粒度をどうするか。
-- **アセットの参照方式**:パスで参照するか、GUID で参照するか。
+- ~~**アセットの参照方式**~~:プロジェクトのフォルダからの相対パスに決めた (M3 の詳細設計)。
 - ~~**ABI v2 への移行方式**~~:v1 の API は v2 の上の互換レイヤーとして残すことにした(Phase 2a)。リソースとビュー(2b)も同じ方式にする予定。
