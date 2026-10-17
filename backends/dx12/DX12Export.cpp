@@ -433,6 +433,10 @@ static const GfxDeviceVTable k_DX12DevVTable =
 	{
 		return static_cast<const DX12DeviceImpl*>(s)->getComputePipelineDesc(h, out);
 	},
+	[](void* s, BufferHandle h, uint64_t offset, uint64_t size, void* out) -> bool
+	{
+		return static_cast<DX12DeviceImpl*>(s)->readBuffer(h, offset, size, out);
+	},
 };
 const GfxDeviceVTable* DX12DeviceImpl::getVTable() { return &k_DX12DevVTable; }
 

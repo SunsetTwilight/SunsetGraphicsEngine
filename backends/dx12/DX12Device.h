@@ -64,6 +64,7 @@ public:
 	void destroyShader (ShaderHandle  h);
 	void destroySampler   (SamplerHandle  h);
 	bool updateBuffer     (BufferHandle   h, const void* data, uint64_t size);
+	bool readBuffer       (BufferHandle   h, uint64_t offset, uint64_t size, void* out);
 	PipelineHandle createPipeline (const GfxPipelineDesc* desc);           // v1 (v2 に変換して作成する)
 	PipelineHandle createGraphicsPipeline(const GfxGraphicsPipelineDesc* desc);   // v2
 	BindingLayoutHandle createBindingLayout (const GfxBindingLayoutDesc* desc);

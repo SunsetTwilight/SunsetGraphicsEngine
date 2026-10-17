@@ -91,6 +91,16 @@ struct FrameInputs
 	IDrawListProvider*                      provider = nullptr;
 };
 
+// 最後の record でグラフのリソースに使ったテクスチャ (リソースビューアー用)
+struct RecordedTexture
+{
+	TextureHandle    handle;
+	GfxFormat        format    = GfxFormat::Unknown;
+	TextureDimension dimension = TextureDimension::Tex2D;
+	uint32_t         width = 0, height = 0, depth = 1, mips = 1, layers = 1, samples = 1;
+	GfxResourceState finalState = GfxResourceState::Common;   // 最後のパスのあとの状態 (サブリソース 0)
+};
+
 struct PassTiming
 {
 	std::string name;
@@ -112,6 +122,10 @@ public:
 	// 最後に読めたフレームのパスごとの GPU 時間 (数フレーム遅れる)。全体は totalGpuMs()
 	const std::vector<PassTiming>& timings() const { return m_timings; }
 	double                         totalGpuMs() const { return m_totalMs; }
+
+	// 最後の record でリソース name に使った一時テクスチャ。インポート / バッファ / 使われていなければ false。
+	// ハンドルは次の record まで有効 (同じコマンドバッファのあとに記録して読むこと。状態は finalState)
+	bool recordedTexture(const std::string& name, RecordedTexture& out) const;
 
 	// 一時リソースとビューをすべて破棄する (リサイズの後は自動で作り直すので不要)
 	void clear();

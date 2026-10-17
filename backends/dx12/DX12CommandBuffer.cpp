@@ -75,6 +75,7 @@ void DX12CommandBufferImpl::begin()
 	m_explicitTableMask   = 0;
 	m_bufferStates.clear();
 	m_resolves.clear();
+	m_readbacks.clear();
 
 	// Direct のみ SRV / Sampler ヒープと RootSignature をバインドする
 	// PSO は setRenderTargets() で RT フォーマットを見てセットする
@@ -625,7 +626,7 @@ bool DX12CommandBufferImpl::requireDirect(const char* fn)
 // バッファの状態を CB の中で合わせる。UPLOAD ヒープ (GENERIC_READ 固定) は対象外。
 void DX12CommandBufferImpl::requireBufferState(const DX12BufRes* buf, D3D12_RESOURCE_STATES state)
 {
-	if (!buf || !buf->res || buf->upload || !isDirect())
+	if (!buf || !buf->res || buf->upload || buf->readback || !isDirect())   // READBACK は COPY_DEST 固定
 		return;
 	ID3D12Resource* res = buf->res.Get();
 	for (auto& bs : m_bufferStates)
@@ -1095,6 +1096,13 @@ void DX12CommandBufferImpl::copyBuffer(BufferHandle dst, uint64_t dstOffset, Buf
 		fprintf(stderr, "[GfxEngine] copyBuffer: UPLOAD ヒープのバッファにはコピーできません\n");
 		return;
 	}
+	if (s->readback)
+	{
+		fprintf(stderr, "[GfxEngine] copyBuffer: Readback のバッファはコピー元にできません\n");
+		return;
+	}
+	if (d->readback)
+		m_readbacks.push_back(dst.id);   // submit のフェンス値を記録する (readBuffer で完了を確かめる)
 	requireBufferState(d, D3D12_RESOURCE_STATE_COPY_DEST);
 	requireBufferState(s, D3D12_RESOURCE_STATE_COPY_SOURCE);
 	m_cmdList->CopyBufferRegion(d->res.Get(), d->versionStride * d->current + dstOffset,

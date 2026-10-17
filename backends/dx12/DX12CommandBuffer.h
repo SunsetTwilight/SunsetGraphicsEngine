@@ -121,6 +121,8 @@ public:
 	// submit 時に参照する: この CB が記録したクエリの resolve
 	struct PendingResolve { uint64_t pool; uint32_t first; uint32_t count; };
 	const std::vector<PendingResolve>& pendingResolves() const { return m_resolves; }
+	// submit 時に参照する: この CB がコピー先にした Readback のバッファ
+	const std::vector<uint64_t>& pendingReadbacks() const { return m_readbacks; }
 
 	bool isDirect() const { return m_type == D3D12_COMMAND_LIST_TYPE_DIRECT; }
 	DX12DeviceImpl*             device()         { return m_dev; }
@@ -194,6 +196,7 @@ private:
 	struct BufferState { ID3D12Resource* res; D3D12_RESOURCE_STATES current; };
 	std::vector<BufferState>    m_bufferStates;
 	std::vector<PendingResolve> m_resolves;
+	std::vector<uint64_t>       m_readbacks;
 
 	void requireBufferState(const DX12BufRes* buf, D3D12_RESOURCE_STATES state);
 	void overrideLocalState(ID3D12Resource* res, D3D12_RESOURCE_STATES state);

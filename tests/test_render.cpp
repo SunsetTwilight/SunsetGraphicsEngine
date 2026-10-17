@@ -145,3 +145,57 @@ TEST_CASE("ヘッドレスでオフスクリーンに描画しても D3D12 の�
 		MESSAGE("D3D12: ", s);
 	CHECK(problems.empty());
 }
+
+TEST_CASE("リードバック: GPU でコピーした内容を CPU で読む (ABI 8)")
+{
+	MessageLog     log;
+	GraphicsEngine engine;
+	REQUIRE_MESSAGE(engine.init(makeConfig(log, "gfx_tests_readback")), engine.lastError());
+
+	const uint32_t values[4] = { 1u, 22u, 333u, 0xDEADBEEFu };
+	const BufferHandle src  = engine.createBuffer({ sizeof(values), BufferUsage::Storage, values, 0 });
+	const BufferHandle back = engine.createBuffer({ sizeof(values), BufferUsage::Readback, nullptr, 0 });
+	REQUIRE(src.valid());
+	REQUIRE(back.valid());
+
+	uint32_t out[4] = {};
+	CHECK_FALSE(engine.readBuffer(back, 0, sizeof(out), out));   // まだコピーしていない
+	CHECK_FALSE(engine.updateBuffer(back, values, sizeof(values)));   // 書き込めない
+
+	ICommandBuffer* cb = engine.allocCommandBuffer();
+	REQUIRE(cb != nullptr);
+	cb->begin();
+	cb->copyBuffer(back, 0, src, 0, sizeof(values));
+	cb->end();
+	engine.submitCommandBuffers({ cb });
+	cb->release();
+
+	bool ok = false;
+	for (int i = 0; i < 1000 && !ok; ++i)
+	{
+		ok = engine.readBuffer(back, 0, sizeof(out), out);
+		if (!ok)
+			std::this_thread::sleep_for(std::chrono::milliseconds(5));
+	}
+	REQUIRE(ok);
+	CHECK(out[0] == 1u);
+	CHECK(out[1] == 22u);
+	CHECK(out[2] == 333u);
+	CHECK(out[3] == 0xDEADBEEFu);
+
+	uint32_t part[2] = {};
+	CHECK(engine.readBuffer(back, 8, 8, part));
+	CHECK(part[0] == 333u);
+	CHECK_FALSE(engine.readBuffer(back, 8, 16, part));   // 範囲外
+	CHECK_FALSE(engine.readBuffer(src, 0, 4, part));     // Readback ではない
+
+	engine.destroyBuffer(src);
+	engine.destroyBuffer(back);
+	engine.shutdown();
+
+	// readBuffer の誤用はエンジンのメッセージ (stderr) だけで、D3D12 のエラーではない
+	const auto problems = log.problems();
+	for (const auto& s : problems)
+		MESSAGE("D3D12: ", s);
+	CHECK(problems.empty());
+}

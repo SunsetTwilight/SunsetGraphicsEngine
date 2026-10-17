@@ -130,6 +130,7 @@ enum class BufferUsage : uint32_t {
 	Uniform = 1 << 2,
 	Storage = 1 << 3,   // UAV として書き込める DEFAULT ヒープのバッファ (initialData はコピーで転送)
 	Staging = 1 << 4,
+	Readback = 1 << 5,  // GPU の内容を CPU で読む (READBACK ヒープ)。copyBuffer のコピー先にだけ使い、readBuffer で読む (ABI 8)
 };
 inline BufferUsage operator|(BufferUsage a, BufferUsage b) {
 	return static_cast<BufferUsage>(static_cast<uint32_t>(a) | static_cast<uint32_t>(b));

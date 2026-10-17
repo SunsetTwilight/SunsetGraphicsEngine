@@ -107,6 +107,11 @@ struct GfxDeviceVTable {
 	// パイプラインの今の記述子 (out->structSize までを書く。debugName はパイプラインが生きている間だけ有効)
 	bool (*getGraphicsPipelineDesc)(const void* self, PipelineHandle h, GfxGraphicsPipelineDesc* out);
 	bool (*getComputePipelineDesc) (const void* self, PipelineHandle h, GfxComputePipelineDesc* out);
+
+	// ---- ABI 8: リードバック (BufferUsage::Readback のバッファ) ----
+	// BufferUsage::Readback のバッファの [offset, offset + size) を out に写す。そのバッファへの copyBuffer を含む
+	// 最後の submit が GPU で完了していなければ false (待たない)。まだ一度もコピーしていないときも false
+	bool (*readBuffer)(void* self, BufferHandle h, uint64_t offset, uint64_t size, void* out);
 };
 
 // ============================================================
@@ -172,6 +177,7 @@ struct IBackendPlugin {
 	bool                updatePipeline      (PipelineHandle h, const GfxComputePipelineDesc& d)   { return vtable->updateComputePipeline(self, h, &d); }
 	bool                getPipelineDesc     (PipelineHandle h, GfxGraphicsPipelineDesc& out) const { return vtable->getGraphicsPipelineDesc(self, h, &out); }
 	bool                getPipelineDesc     (PipelineHandle h, GfxComputePipelineDesc& out) const  { return vtable->getComputePipelineDesc(self, h, &out); }
+	bool                readBuffer          (BufferHandle h, uint64_t offset, uint64_t size, void* out) { return vtable->readBuffer(self, h, offset, size, out); }
 
 	void bindTexture   (TextureHandle h, uint32_t s)  { vtable->bindTexture(self, h, s);  }
 	void draw          (const GfxDrawCmd& cmd)        { vtable->draw(self, &cmd);         }

@@ -254,6 +254,16 @@ TEST_CASE("レンダーグラフの実行: Compute / MRT / 合成を記録して
 			CHECK(runFrame());
 		CHECK(executor.pooledTextures() == 4);
 
+		// 最後の record のテクスチャ (リソースビューアー用)
+		rg::RecordedTexture rt;
+		REQUIRE(executor.recordedTexture("depth", rt));
+		CHECK(rt.handle.valid());
+		CHECK(rt.format == GfxFormat::D32_Float);
+		CHECK(rt.width == 256);
+		CHECK(rt.finalState == GfxResourceState::AllShaderResource);
+		CHECK_FALSE(executor.recordedTexture("$out", rt));      // インポートは対象外
+		CHECK_FALSE(executor.recordedTexture("missing", rt));
+
 		// パイプラインは出力のフォーマットごとに 1 つ
 		rg::PipelineTargets t;
 		t.numRenderTargets = 1;

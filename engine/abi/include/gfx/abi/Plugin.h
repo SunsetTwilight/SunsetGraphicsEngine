@@ -28,7 +28,8 @@
 //  6: GfxDeviceConfig にアダプターの種類 (WARP) とデバッグメッセージのコールバックを追加
 //  7: シェーダーを DXC (DXIL) に統一。GfxShaderDesc の拡張、ShaderStage の追加、
 //     シェーダーのリフレクション、シェーダー / パイプラインの作り直し (ホットリロード)
-#define GFX_ABI_VERSION 7u
+//  8: リードバック (BufferUsage::Readback と readBuffer)
+#define GFX_ABI_VERSION 8u
 
 struct GfxABIInfo
 {

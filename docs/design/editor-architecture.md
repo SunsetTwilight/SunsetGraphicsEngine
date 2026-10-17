@@ -492,6 +492,15 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 | テスト | `tests/test_rendergraph.cpp` (`gfx_tests_unit`、GPU 不要): JSON の往復と診断、ディファードの順序 / 寿命 / バリア、カリングと keep / enabled、order と after と循環、WAR / WAW、UAV バリア、検証のエラー、bind とレイアウトの照合。手法の例として、カスケードシャドウ、ブルームの mip の連鎖、TAA の履歴、Forward+、MSAA の解決、間接 dispatch、パラメーターと when の切り替え、ビューポートとサブリソースの検証 |
 
 
+#### リードバック (ABI 8、v0.4.0、M4 のリソースビューアーのため)
+
+| 項目 | 内容 |
+|------|------|
+| `BufferUsage::Readback` | READBACK ヒープのバッファ (常時 Map、COPY_DEST 固定)。`copyBuffer` のコピー先にだけ使う (コピー元、`updateBuffer`、Uniform / Storage / 初期データとの組み合わせは不可) |
+| `readBuffer(h, offset, size, out)` | そのバッファへの `copyBuffer` を含む最後の submit が GPU で完了していれば内容を写して true。終わっていない / まだコピーしていない / 範囲外なら false (待たない)。CB がコピー先にした Readback のバッファを記録し、submit のフェンス値と結び付ける |
+| `Executor::recordedTexture(name)` | 最後の `record` でグラフのリソースに使った一時テクスチャ (ハンドル、フォーマット、大きさ、mip、最後の状態)。次の `record` まで有効。リソースビューアーが、同じコマンドバッファのあとに読む |
+| テスト | `test_render.cpp`: Storage のバッファの内容を Readback にコピーして読む (コピー前と範囲外と Readback でないバッファは false、書き込みは不可)。`test_rendergraph_exec.cpp`: `recordedTexture` (インポートと存在しないリソースは false) |
+
 #### M3d の実装状況 (完了、SunsetStudio)
 
 SunsetEditor のビューポートを、`editor/assets/graphs/viewport.json` (GBuffer → Lighting → Grid → Composite) で描く。
@@ -534,7 +543,7 @@ M0 (テスト、CI、v0.1.0 のタグ)、M1 (Phase 2c、v0.2.0)、M2a〜M2c (エ
 | ~~M1 (Phase 2c)~~ | DXC への統一、リフレクション、スキーマの X マクロ、記述子の JSON の往復、シェーダーのホットリロード | 完了 (v0.2.0、ABI 7) |
 | ~~M2 (Studio)~~ | エディターの骨格 (webview、Bridge、ビューポート、インスペクター)。詳細は editor-shell.md | M2a〜M2c は完了。M2d (統計) は M3b で入れた (パスごとの GPU 時間) |
 | ~~M3 (Phase 3)~~ | レンダーグラフ。段階 M3a〜M3d は上の「M3 の詳細設計」。M3a〜M3d (データ、コンパイル、実行、保存とホットリロード、エディター) は完了 (v0.3.0) | グラフからサンプルと同じ画が出る。バリアが自動で生成される。エディターでパスのパイプラインとつなぎ方を編集できる |
-| M4 | エディターの MVP。M4a (完了): プロジェクトファイル (`.sunsetproj`、開く / テンプレートから新規作成。詳細は editor-shell.md の「プロジェクトファイル」)、Undo/Redo (完了)、以降: リソースビューアー、グラフ編集 (ノードエディター、パスの追加と削除) | `.sunsetproj` で作品ごとのフォルダを開ける。ディファードの合成方法を UI だけで変更できる |
+| M4 | エディターの MVP。M4a (完了): プロジェクトファイル (`.sunsetproj`、開く / テンプレートから新規作成。詳細は editor-shell.md の「プロジェクトファイル」)、Undo/Redo (完了)、リソースビューアー (完了。エンジン v0.4.0 / ABI 8 のリードバックを使う)、以降:、グラフ編集 (ノードエディター、パスの追加と削除) | `.sunsetproj` で作品ごとのフォルダを開ける。ディファードの合成方法を UI だけで変更できる |
 | 並行 | Vulkan バックエンドを ABI v2 で作り直す (macOS / Linux のビューポートの検証もここで行う) | |
 
 完了済みの Phase:1、2a、2b、2c、3。

@@ -163,6 +163,7 @@ struct Executor::Impl
 	std::vector<std::unique_ptr<PooledTexture>> textures;
 	std::vector<std::unique_ptr<PooledBuffer>>  buffers;
 	std::vector<ViewHandle>                     frameViews;   // インポートのビュー (記録の最後に破棄する)
+	std::map<std::string, RecordedTexture>      recorded;     // 最後の record のテクスチャ (リソースビューアー用)
 
 	// ---- タイムスタンプ ----
 	struct Slot
@@ -990,6 +991,7 @@ bool Executor::Impl::record(ICommandBuffer* cb, const GraphDesc& graph, const Co
 	}
 	++frame;
 	harvestTimings();
+	recorded.clear();
 	for (auto& t : textures) t->inUse = false;
 	for (auto& b : buffers) b->inUse = false;
 	current = &c;
@@ -1048,6 +1050,25 @@ bool Executor::Impl::record(ICommandBuffer* cb, const GraphDesc& graph, const Co
 
 	for (auto v : frameViews) engine.destroyView(v);   // GPU が使い終わるまでエンジンが解放を遅らせる
 	frameViews.clear();
+
+	for (size_t ri = 0; ri < res.size(); ++ri)
+	{
+		const Res& r = res[ri];
+		if (!r.tex || !r.desc)
+			continue;
+		RecordedTexture t;
+		t.handle     = r.tex->handle;
+		t.format     = r.desc->format;
+		t.dimension  = r.desc->dimension;
+		t.width      = r.tex->key.width;
+		t.height     = r.tex->key.height;
+		t.depth      = r.desc->dimension == TextureDimension::Tex3D ? r.desc->depth : 1;
+		t.mips       = r.info->mips;
+		t.layers     = r.info->layers;
+		t.samples    = r.desc->sampleCount;
+		t.finalState = r.info->finalState;
+		recorded[r.info->name] = t;
+	}
 	current = nullptr;
 	return true;
 }
@@ -1073,6 +1094,16 @@ bool Executor::record(ICommandBuffer* cb, const GraphDesc& graph, const Compiled
 void Executor::clear()
 {
 	m_impl->clear();
+	m_impl->recorded.clear();
+}
+
+bool Executor::recordedTexture(const std::string& name, RecordedTexture& out) const
+{
+	auto it = m_impl->recorded.find(name);
+	if (it == m_impl->recorded.end())
+		return false;
+	out = it->second;
+	return true;
 }
 
 size_t Executor::pooledTextures() const { return m_impl->textures.size(); }

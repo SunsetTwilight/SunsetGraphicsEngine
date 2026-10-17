@@ -141,6 +141,8 @@ struct DX12BufRes
 	uint32_t    stride        = 0;   // 頂点ストライド / インデックスサイズ (2 なら R16)
 	BufferUsage usage         = BufferUsage::Vertex;
 	bool        upload        = false;
+	bool        readback      = false;   // READBACK ヒープ (COPY_DEST 固定、常時 Map)
+	uint64_t    readFence     = 0;       // 最後にこのバッファへコピーした submit のフェンス値 (readback のみ)
 	uint8_t*    mapped        = nullptr;
 	uint32_t    versionCount  = 1;
 	uint32_t    current       = 0;

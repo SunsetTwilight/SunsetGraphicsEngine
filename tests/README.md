@@ -5,7 +5,7 @@
 | テスト | 実行ファイル | 内容 | GPU |
 |-------|-------------|------|-----|
 | `unit` | `gfx_tests_unit` | ABI 情報、`BufferUsage` の判定、スキーマの表、JSON (パース / 文字列化、記述子との往復、エラーと警告)、レンダーグラフ (JSON、コンパイル、検証、グラフのファイルの読み直しと保存) | 不要 |
-| `render` | `gfx_tests_render` | ウィンドウなしでオフスクリーンに描画し、D3D12 デバッグレイヤーのエラー / 警告が 0 件であることと、タイムスタンプで GPU がコマンドを実行したことを確認する。Uniform バッファのバージョン切り替えと、使用中リソースの遅延解放の経路も通る。シェーダー (DXC、リフレクション、`#include` とマクロ、エラーの通知)、作り直し (`updateShader` / `updatePipeline`、JSON から作ったパイプライン、`ShaderLibrary` のホットリロード)、レンダーグラフの実行 (`PipelineLibrary` のアセットと診断、`Executor` で Compute / MRT / 合成を記録、一時リソースの再利用、GPU 時間、アセットの変更をハンドルのまま反映、失敗したら前のまま、保存) | 必要 (WARP でも可) |
+| `render` | `gfx_tests_render` | ウィンドウなしでオフスクリーンに描画し、D3D12 デバッグレイヤーのエラー / 警告が 0 件であることと、タイムスタンプで GPU がコマンドを実行したことを確認する。Uniform バッファのバージョン切り替えと、使用中リソースの遅延解放の経路も通る。シェーダー (DXC、リフレクション、`#include` とマクロ、エラーの通知)、作り直し (`updateShader` / `updatePipeline`、JSON から作ったパイプライン、`ShaderLibrary` のホットリロード)、リードバック (`readBuffer`)、レンダーグラフの実行 (`PipelineLibrary` のアセットと診断、`Executor` で Compute / MRT / 合成を記録、一時リソースの再利用、GPU 時間、アセットの変更をハンドルのまま反映、失敗したら前のまま、保存) | 必要 (WARP でも可) |
 | `reject` | `gfx_tests_reject` | ABI のバージョンが違うバックエンド DLL が拒否されることを確認する (専用のディレクトリに偽の `gfx_dx12.dll` を置く) | 不要 |
 
 ## 実行

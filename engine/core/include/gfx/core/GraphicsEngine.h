@@ -358,6 +358,13 @@ public:
 	using TLASInstance   = GfxTLASInstance;
 	using RTPipelineDesc = GfxRTPipelineDesc;
 
+	// BufferUsage::Readback のバッファを読む (copyBuffer を含む submit が GPU で完了していなければ false。待たない)
+	bool readBuffer(BufferHandle h, uint64_t offset, uint64_t size, void* out)
+	{
+		auto* p = device();
+		return p && p->readBuffer(h, offset, size, out);
+	}
+
 	// バッファにデータを書き込む (Uniform はバージョンを切り替えて実行中のフレームと競合しない)
 	bool updateBuffer(BufferHandle h, const void* data, uint64_t size)
 	{

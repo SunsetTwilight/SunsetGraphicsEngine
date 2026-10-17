@@ -554,6 +554,12 @@ void DX12DeviceImpl::submitCommandBuffers(
 	{
 		impl->markSubmitted(fence);
 		m_openCBs.erase(impl);
+		for (uint64_t id : impl->pendingReadbacks())
+		{
+			auto bit = m_buffers.find(id);
+			if (bit != m_buffers.end())
+				bit->second.readFence = fence;
+		}
 		for (const auto& r : impl->pendingResolves())
 			if (DX12QueryPoolRes* qp = getQueryPool(r.pool))
 				for (uint32_t q = r.first; q < r.first + r.count; ++q)
@@ -622,6 +628,7 @@ void DX12DeviceImpl::drawOnCmdList(
 
 // バッファリソースを作成する
 //   ・initialData / Staging / Uniform → UPLOAD ヒープ (常時 Map)
+//   ・Readback                         → READBACK ヒープ (常時 Map。copyBuffer のコピー先、readBuffer で読む)
 //   ・それ以外                        → DEFAULT ヒープ (updateBuffer はステージング経由)
 //   ・Uniform は MAX_VERSIONS 個のバージョンを持つリング (updateBuffer ごとに切り替え)
 BufferHandle DX12DeviceImpl::createBuffer(const GfxBufferDesc* desc)
@@ -636,6 +643,27 @@ BufferHandle DX12DeviceImpl::createBuffer(const GfxBufferDesc* desc)
 
 	const bool isUniform = hasUsage(desc->usage, BufferUsage::Uniform);
 	const bool isStorage = hasUsage(desc->usage, BufferUsage::Storage) && !isUniform;
+	if (hasUsage(desc->usage, BufferUsage::Readback))
+	{
+		if (isUniform || isStorage || desc->initialData)
+		{
+			fprintf(stderr, "[GfxEngine] createBuffer: Readback は Uniform / Storage / initialData と組み合わせられません\n");
+			return {};
+		}
+		buf.readback      = true;
+		buf.versionStride = desc->size;
+		buf.versionCount  = 1;
+		buf.res = createBufferResource(m_device.Get(), desc->size, D3D12_HEAP_TYPE_READBACK);
+		if (!buf.res)
+			return {};
+		void* p = nullptr;
+		if (FAILED(buf.res->Map(0, nullptr, &p)))
+			return {};
+		buf.mapped = static_cast<uint8_t*>(p);
+		const uint64_t rid = m_nextId++;
+		m_buffers.emplace(rid, std::move(buf));
+		return { rid };
+	}
 	buf.upload = !isStorage
 			  && ((desc->initialData != nullptr)
 			   || hasUsage(desc->usage, BufferUsage::Staging)
@@ -986,11 +1014,35 @@ void DX12DeviceImpl::destroyShader (ShaderHandle  h) { m_shaders.erase(h.id);  }
 //                      実行中のフレームが読んでいるバージョンは上書きしない
 //   ・その他 UPLOAD   : submit 済みの GPU 処理の完了を待ってから書き込む (同期)
 //   ・DEFAULT ヒープ  : ステージングバッファ経由でコピーし完了を待つ (同期)
+bool DX12DeviceImpl::readBuffer(BufferHandle h, uint64_t offset, uint64_t size, void* out)
+{
+	auto it = m_buffers.find(h.id);
+	if (it == m_buffers.end() || !out)
+		return false;
+	const DX12BufRes& buf = it->second;
+	if (!buf.readback || !buf.mapped)
+	{
+		fprintf(stderr, "[GfxEngine] readBuffer: Readback のバッファではありません\n");
+		return false;
+	}
+	if (offset + size > buf.size)
+		return false;
+	if (buf.readFence == 0 || buf.readFence > completedFence())
+		return false;   // まだコピーしていない / GPU が終わっていない
+	memcpy(out, buf.mapped + offset, static_cast<size_t>(size));
+	return true;
+}
+
 bool DX12DeviceImpl::updateBuffer(BufferHandle h, const void* data, uint64_t size)
 {
 	auto it = m_buffers.find(h.id);
 	if (it == m_buffers.end() || !it->second.res || !data)
 		return false;
+	if (it->second.readback)
+	{
+		fprintf(stderr, "[GfxEngine] updateBuffer: Readback のバッファには書き込めません\n");
+		return false;
+	}
 
 	DX12BufRes& buf = it->second;
 	if (size > buf.size)
