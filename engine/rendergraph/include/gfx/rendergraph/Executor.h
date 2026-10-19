@@ -52,6 +52,9 @@ struct DrawContext
 	const CompiledPass* pass   = nullptr;
 	uint32_t            width  = 0;   // 出力の大きさ (出力がなければ基準の大きさ)
 	uint32_t            height = 0;
+	// Raster のパスの出力のフォーマット。アプリが別のパイプライン (マテリアルなど) に切り替えるときは、
+	// PipelineLibrary::graphics(パス, targets) でこの出力に合う PSO を作る
+	PipelineTargets     targets;
 
 	const std::string& passName() const { return pass->name; }
 	const std::string& view()     const { return pass->desc.view; }

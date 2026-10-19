@@ -457,6 +457,7 @@ C++ の静的ライブラリ。エンジンの公開 API (C++ ラッパー) だ�
 - RTV / DSV のフォーマットと枚数、サンプル数は書かない (書いても、パスの出力の値で上書きする)。出力が違うパスで使うと、別の PSO を作る。
 - シェーダーのファイルは、プロジェクトのフォルダからの相対パス。`#include` はシェーダーのファイルからの相対パスで探す。
 - 名前で渡す定数 (`constants.source` が `inline` 以外) は、`IDrawListProvider::constants(name)` が返す定数バッファをつなぐ。無効なハンドルを返すと Executor はつながず、アプリが `draw` の中で `DrawContext::paramOf(name)` の場所に設定する (オブジェクトごとの定数など)。
+- Raster のパスでは `DrawContext::targets` に出力のフォーマット (RTV の数と形式、DSV) が入る。アプリが `draw` の中で別のパイプライン (マテリアルのパイプラインなど) に切り替えるときは、`PipelineLibrary::graphics(パス, ctx.targets)` で出力に合う PSO を作って `bindPipeline` する。ルートシグネチャが変わるとバインドが外れるので、定数やテーブルはアプリが設定し直す (v0.4.2。SunsetStudio の M5-4 で使う)。
 
 #### M3b の実装状況 (完了)
 

@@ -366,6 +366,54 @@ TEST_CASE("レンダーグラフの実行: Compute / MRT / 合成を記録して
 			}
 		}
 
+		// パスの出力のフォーマットがアプリに渡る (DrawContext::targets。マテリアルのパイプラインに切り替えるとき使う)
+		{
+			struct Probe : rg::IDrawListProvider
+			{
+				rg::PipelineTargets targets;
+				int                 calls = 0;
+				void draw(const rg::DrawListQuery&, const rg::DrawContext&) override {}
+				void custom(const std::string& name, const rg::DrawContext& ctx) override
+				{
+					if (name != "probe") return;
+					targets = ctx.targets;
+					++calls;
+					ctx.cb->drawInstanced(3, 1, 0, 0);
+				}
+			} probe;
+			const char* probeGraph = R"json({
+  "resources": {
+    "a":     { "format": "R8G8B8A8_Unorm",     "size": { "relative": 1.0 } },
+    "b":     { "format": "R16G16B16A16_Float", "size": { "relative": 1.0 } },
+    "depth": { "format": "D32_Float",          "size": { "relative": 1.0 }, "clear": { "depth": 1.0 } }
+  },
+  "passes": [
+    { "name": "Probe", "type": "Raster", "pipeline": "pipelines/mrt.json", "keep": true,
+      "outputs": [ { "res": "a", "as": "RTV0", "load": "clear" }, { "res": "b", "as": "RTV1", "load": "clear" },
+                   { "res": "depth", "as": "DSV", "load": "clear" } ],
+      "content": { "custom": "probe" } }
+  ]
+})json";
+			rg::GraphDesc g3;
+			REQUIRE(rg::graphFromString(probeGraph, g3));
+			const rg::CompiledGraph c3 = rg::compile(g3, options);
+			for (const auto& d : c3.diagnostics) MESSAGE(d.text());
+			REQUIRE(c3.ok);
+			rg::FrameInputs pin = in;
+			pin.provider = &probe;
+			ICommandBuffer* cb3 = engine.allocCommandBuffer();
+			cb3->begin();
+			CHECK(executor.record(cb3, g3, c3, pin));
+			cb3->end();
+			engine.submitCommandBuffers({ cb3 });
+			cb3->release();
+			CHECK(probe.calls == 1);
+			CHECK(probe.targets.numRenderTargets == 2);
+			CHECK(probe.targets.rtvFormats[0] == GfxFormat::R8G8B8A8_Unorm);
+			CHECK(probe.targets.rtvFormats[1] == GfxFormat::R16G16B16A16_Float);
+			CHECK(probe.targets.dsvFormat == GfxFormat::D32_Float);
+		}
+
 		// アプリが渡していないインポートは、何も記録せずにエラー
 		rg::FrameInputs missing = in;
 		missing.imports.clear();

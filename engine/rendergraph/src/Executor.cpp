@@ -865,6 +865,7 @@ void Executor::Impl::recordPass(ICommandBuffer* cb, const CompiledPass& pass, st
 			return;
 		}
 		if (w > 0) { ctx.width = w; ctx.height = h; }
+		ctx.targets = targets;
 		GfxViewport vp;
 		vp.width  = static_cast<float>(ctx.width);
 		vp.height = static_cast<float>(ctx.height);
