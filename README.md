@@ -2,6 +2,8 @@
 
 DLL プラグイン方式の DirectX 12 / Vulkan グラフィックスエンジン。単独のライブラリとして、ほかのプロジェクトから使えます。
 
+> **AI を使った開発について**: このリポジトリは、AI (Anthropic の Claude / Claude Code) を使って作成しています。コード、テスト、ドキュメントに AI が書いたものを含みます。コミットのメッセージに `Co-Authored-By: Claude` が付いているものは、AI と一緒に作成したコミットです。
+
 - エンジン本体は `SunsetGraphicsEngine.dll`。DLL の境界は C ABI で、C++ API はヘッダーのみのラッパー
 - DX12・Vulkan のバックエンドは、本体が実行時に `LoadLibrary` / `dlopen` でロードする DLL
 - アプリと DLL のコンパイラ / CRT / Debug・Release が違っても動く
